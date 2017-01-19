@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$USER_HOME$/mData/MICCAI_tool/Tracking_Robotic_Training/.idea/Tracking_Robotic_Training.iml" filepath="$USER_HOME$/mData/MICCAI_tool/Tracking_Robotic_Training/.idea/Tracking_Robotic_Training.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/toolPose.iml" filepath="$PROJECT_DIR$/.idea/toolPose.iml" />
+    </modules>
+  </component>
+</project>

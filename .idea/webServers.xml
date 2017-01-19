@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="dc46f992-c74b-48e1-a254-6486fdf5e8e8" name="umboNet2" url="http://211.21.111.158">
+        <fileTransfer host="211.21.111.158" port="23" rootFolder="/home/xiaofei" accessType="SFTP">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" />
+          </advancedOptions>
+          <option name="port" value="23" />
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>

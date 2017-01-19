@@ -1,0 +1,9 @@
+wp
+.ipynb_checkpoints/
+.env/
+*.zip
+*.pyc
+*.un~
+*.t7
+config
+models
