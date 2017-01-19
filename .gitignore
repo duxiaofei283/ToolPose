@@ -1,9 +1,11 @@
 wp
 .ipynb_checkpoints/
 .env/
+.idea
 *.zip
 *.pyc
 *.un~
 *.t7
 config
 models
+
