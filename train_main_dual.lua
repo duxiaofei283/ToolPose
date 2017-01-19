@@ -47,19 +47,20 @@ end
 local opt = {
 	dataDir = dataDir,
 	saveDir = saveDir,
-	retrain = 'last', -- nil, 'last' or 'best'
+	retrain = nil, -- nil, 'last' or 'best'
 	learningRate = 1e-3,  -- old 1e-5
-	momentum = 0.9,
+	momentum = 0.99,
 	weightDecay = 0.0005, -- old 0.0005
 	decayRatio = 0.95,
 	updateIternal = 10,
---	modelConf = {type='toolDualPoseSep', v=1, jointRadius=20},
-	modelConf = {type='toolPartDet', v=1, jointRadius=10},
+--	modelConf = {type='toolDualPoseSep', v=1, jointRadius=20, modelOutputScale=4},
+--	modelConf = {type='toolPartDet', v=1, jointRadius=10, modelOutputScale=4},
+	modelConf = {type='toolPartDetFull', v=1, jointRadius=40, modelOutputScale=1},
 	gpus = {1},
 	nThreads = 6,
 --	batchSize = 1,  --  examples seems to be the maximum setting for one GPU
-	trainBatchSize = 4,
-	valBatchSize = 4,
+	trainBatchSize = 2,
+	valBatchSize = 2,
 	inputWidth = 480, --720,
 	inputHeight = 384, -- 576,
 	rotMaxDegree = 0,
@@ -73,6 +74,7 @@ local opt = {
 	nEpoches = 300
 }
 opt.jointRadius = opt.modelConf.jointRadius or 20
+opt.modelOutputScale = opt.modelConf.modelOutputScale or 4
 
 local saveID = getSaveID(opt.modelConf)
 local initModelPath = paths.concat(opt.saveDir, 'model.' .. saveID .. '.init.t7')
