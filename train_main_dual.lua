@@ -53,16 +53,14 @@ local opt = {
 	weightDecay = 0.0005, -- old 0.0005
 	decayRatio = 0.95,
 	updateIternal = 10,
---	modelConf = {type='toolDualPoseSep', v=1, jointRadius=20, modelOutputScale=4},
---	modelConf = {type='toolPartDet', v=1, jointRadius=10, modelOutputScale=4},
-	modelConf = {type='toolPartDetFull', v=1, jointRadius=40, modelOutputScale=1},
+--	modelConf = {type='toolDualPoseSep', v=1, jointRadius=20, modelOutputScale=4, inputWidth=480, inputHeight=384},
+--	modelConf = {type='toolPartDet', v=1, jointRadius=10, modelOutputScale=4, inputWidth=480, inputHeight=384},
+	modelConf = {type='toolPartDetFull', v=1, jointRadius=10, modelOutputScale=1, inputWidth=320, inputHeight=256},
 	gpus = {1},
 	nThreads = 6,
 --	batchSize = 1,  --  examples seems to be the maximum setting for one GPU
-	trainBatchSize = 2,
-	valBatchSize = 2,
-	inputWidth = 480, --720,
-	inputHeight = 384, -- 576,
+	trainBatchSize = 1,
+	valBatchSize = 1,
 	rotMaxDegree = 0,
     toolJointNames = {'LeftClasperPoint', 'RightClasperPoint',
                           'HeadPoint', 'ShaftPoint', 'EndPoint' }, -- joint number = 5
@@ -75,6 +73,8 @@ local opt = {
 }
 opt.jointRadius = opt.modelConf.jointRadius or 20
 opt.modelOutputScale = opt.modelConf.modelOutputScale or 4
+opt.inputWidth = opt.modelConf.inputWidth or 480  -- 720
+opt.inputHeight = opt.modelConf.inputHeight or 384 -- 576
 
 local saveID = getSaveID(opt.modelConf)
 local initModelPath = paths.concat(opt.saveDir, 'model.' .. saveID .. '.init.t7')

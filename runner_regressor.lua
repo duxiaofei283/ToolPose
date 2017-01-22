@@ -1,3 +1,4 @@
+require 'nn'
 require 'cunn'
 require 'cudnn'
 require 'cutorch'
@@ -204,16 +205,17 @@ function Runner:__init(det_model_path, net_path, opt, optimState)
     self.inputWidth = opt.inputWidth
     self.inputHeight = opt.inputHeight
 
-    self.framesGPU = nil
+--    self.framesGPU = nil
     self.mapsGPU = nil
     if nGPU > 1 then
-        self.framesGPU = cutorch.createCudaHostTensor(self.batchSize, 3, self.inputHeight, self.inputWidth)
-        self.mapsGPU = cutorch.createCudaHostTensor(self.batchSize, self.toolJointNum+2*self.toolCompoNum, self.inputHeight, self.inputWidth)
+--        self.framesGPU = cutorch.createCudaHostTensor(self.batchSize, 3, self.inputHeight, self.inputWidth)
+--        self.mapsGPU = cutorch.createCudaHostTensor(self.batchSize, self.toolJointNum+2*self.toolCompoNum, self.inputHeight, self.inputWidth)
     else
 --        self.framesGPU = torch.CudaTensor(self.batchSize, 3, self.inputHeight, self.inputWidth)
 --        self.mapsGPU = torch.CudaTensor(self.batchSize, 1, self.inputHeight, self.inputWidth)
-        self.framesGPU = torch.CudaTensor()
+--        self.framesGPU = torch.CudaTensor()
         self.mapsGPU = torch.CudaTensor()
+        self.inputsGPU = torch.CudaTensor()
     end
 
     self.params, self.gradParams = self.model:getParameters()
@@ -255,22 +257,25 @@ function Runner:train(epoch)
         -- load data
         dataTime = dataTime + dataTimer:time().real
         -- transfer over to GPU
-        self.framesGPU:resize(framesCPU:size()):copy(framesCPU)
+--        self.framesGPU:resize(framesCPU:size()):copy(framesCPU)
         self.mapsGPU:resize(mapsCPU:size()):copy(mapsCPU)
+
+        -- todo: deal with then outputscale ~= 1
+        self.inputsGPU:resize(framesCPU:size(1), framesCPU:size(2)+mapsCPU:size(2), framesCPU:size(3), framesCPU:size(4))
+        self.inputsGPU[{{},{1,3}}]:copy(framesCPU)
 
         -- reset gradparameters
         self.gradParams:zero()
         -- forward
---        print(self.framesGPU:size())
---        print(self.mapsGPU:size())
-        local jointsGPU = self.detModel:forward(self.framesGPU)
-        local outputsGPU = self.model:forward(jointsGPU)
+--        local jointsGPU = self.detModel:forward(self.framesGPU)
+        self.inputsGPU[{{},{4,-1}}] = self.detModel:forward(self.inputsGPU[{{},{1,3}}])
+        local outputsGPU = self.model:forward(self.inputsGPU)
         local loss_batch = self.criterion:forward(outputsGPU, self.mapsGPU)
 
         loss = loss + loss_batch
         -- backward
         local grad_output = self.criterion:backward(outputsGPU, self.mapsGPU)
-        self.model:backward(jointsGPU, grad_output)
+        self.model:backward(self.inputsGPU, grad_output)
         -- update parameters
         optim.sgd(feval, self.params, self.optimState)
         -- todo: accumulate accuracy
@@ -290,7 +295,7 @@ function Runner:train(epoch)
         if n == framesCPU:size(1) then
             print(mapsCPU:max())
             print(outputsGPU:max())
-            saveMatResult(framesCPU, mapsCPU, jointsGPU, outputsGPU, self.toolJointNames, self.toolCompoNames,'/home/xiaofei/workspace/toolPose/regress_results/train')
+            saveMatResult(framesCPU, mapsCPU, self.inputsGPU[{{},{4,-1}}], outputsGPU, self.toolJointNames, self.toolCompoNames,'/home/xiaofei/workspace/toolPose/regress_results/train')
         end
 
         -- check that the storage didn't get changed due to an unfortunate getParameters call
@@ -338,18 +343,23 @@ function Runner:val(epoch)
 
     self.model:evaluate()
 
+
     for n, framesCPU, mapsCPU, jointAnnoTab in self.dataLoader:load(2) do
         -- load data
         dataTime = dataTime + dataTimer:time().real
         -- transfer over to GPU
-        self.framesGPU:resize(framesCPU:size()):copy(framesCPU)
+--        self.framesGPU:resize(framesCPU:size()):copy(framesCPU)
         self.mapsGPU:resize(mapsCPU:size()):copy(mapsCPU)
 
+        -- todo: deal with then outputscale ~= 1
+        self.inputsGPU:resize(framesCPU:size(1), framesCPU:size(2)+mapsCPU:size(2), framesCPU:size(3), framesCPU:size(4))
+        self.inputsGPU[{{},{1,3}}]:copy(framesCPU)
+
         -- forward
---        print(self.framesGPU:size())
---        print(self.mapsGPU:size())
-        local jointsGPU = self.detModel:forward(self.framesGPU)
-        local outputsGPU = self.model:forward(jointsGPU)
+--        local jointsGPU = self.detModel:forward(self.framesGPU)
+        self.inputsGPU[{{},{4,-1}}] = self.detModel:forward(self.inputsGPU[{{},{1,3}}])
+
+        local outputsGPU = self.model:forward(self.inputsGPU)
         local loss_batch = self.criterion:forward(outputsGPU, self.mapsGPU)
         loss = loss + loss_batch
         -- todo: accumulate accuracy
@@ -366,11 +376,12 @@ function Runner:val(epoch)
 
         N = N + 1
 
+
         -- visualize result for debugging
         if n == framesCPU:size(1) then
             print(mapsCPU:max())
             print(outputsGPU:max())
-            saveMatResult(framesCPU, mapsCPU, jointsGPU, outputsGPU, self.toolJointNames, self.toolCompoNames, '/home/xiaofei/workspace/toolPose/regress_results/val')
+            saveMatResult(framesCPU, mapsCPU, self.inputsGPU[{{},{4,-1}}], outputsGPU, self.toolJointNames, self.toolCompoNames, '/home/xiaofei/workspace/toolPose/regress_results/val')
         end
 
         xlua.progress(n, size)
@@ -410,17 +421,21 @@ function Runner:test(epoch)
         -- load data
         dataTime = dataTime + dataTimer:time().real
         -- transfer over to GPU
-        self.framesGPU:resize(framesCPU:size()):copy(framesCPU)
+--        self.framesGPU:resize(framesCPU:size()):copy(framesCPU)
+
+        -- todo: deal with then outputscale ~= 1
+        self.inputsGPU:resize(framesCPU:size(1), framesCPU:size(2)+self.toolJointNum+self.toolCompoNum, framesCPU:size(3), framesCPU:size(4))
+        self.inputsGPU[{{},{1,3}}]:copy(framesCPU)
 
         -- forward
---        print(self.framesGPU:size())
-        local jointsGPU = self.detModel:forward(self.framesGPU)
-        local outputsGPU = self.model:forward(jointsGPU)
+--        local jointsGPU = self.detModel:forward(self.framesGPU)
+        self.inputsGPU[{{},{4,-1}}] = self.detModel:forward(self.inputsGPU[{{},{1,3}}])
+        local outputsGPU = self.model:forward(self.inputsGPU)
         N = N + 1
 
         -- visualize result for debugging
         if n == framesCPU:size(1) then
-            saveMatResult(framesCPU, mapsCPU, jointsGPU, outputsGPU, self.toolJointNames, self.toolCompoNames, '/home/xiaofei/workspace/toolPose/regress_results/test')
+            saveMatResult(framesCPU, mapsCPU, self.inputsGPU[{{},{4,-1}}], outputsGPU, self.toolJointNames, self.toolCompoNames, '/home/xiaofei/workspace/toolPose/regress_results/test')
         end
 
         xlua.progress(n, size)

@@ -283,4 +283,5 @@ print('saved model ' .. saveID .. ' to ' .. paths.concat(saveDir, initModelPath)
 
 -- toolPartDet v=1: j_radius=10, inputsize=[3, 384, 480], outputsize=[5+4, 96, 120], model_output_scale=4,
 
--- toolPartDetFull v=1: j_radius = 40, inputsize = 3, 384, 480], outputsize = [5+4, 384, 480], model_output_scale=1
+-- toolPartDetFull v=1: j_radius = 10, inputsize = [3, 384, 480], outputsize = [5+4, 384, 480], model_output_scale=1
+-- toolPartDetFull v=2: j_radius =  3, inputsize = [3, ]

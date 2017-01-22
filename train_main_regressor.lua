@@ -47,21 +47,21 @@ end
 local opt = {
 	dataDir = dataDir,
 	saveDir = saveDir,
-	retrain = 'last', -- nil, 'last' or 'best'
+	retrain = nil, -- nil, 'last' or 'best'
 	learningRate = 1e-3,  -- old 1e-5
-	momentum = 0.9,
+	momentum = 0.98,
 	weightDecay = 0.0005, -- old 0.0005
 	decayRatio = 0.95,
 	updateIternal = 10,
-    detModelConf = {type='toolDualPoseSep', v=1},
-	modelConf = {type='toolPoseRegress', v=1},
+--    detModelConf = {type='toolDualPoseSep', v=1, jointRadius=20, modelOutputScale=4},
+--	modelConf = {type='toolPoseRegress', v=1, jointRadius = 20, modelOutputScale=4},
+	detModelConf = {type='toolPartDetFull', v=1, jointRadius=10, modelOutputScale=1, inputWidth=320, inputHeight=256},
+	modelConf = {type='toolPoseRegressFull', v=2, jointRadius=10, modelOutputScale=1, inputWidth=320, inputHeight=256},
 	gpus = {1},
 	nThreads = 6,
---	batchSize = 1,  --  examples seems to be the maximum setting for one GPU
-	trainBatchSize = 5,
-	valBatchSize = 5,
-	inputWidth = 480, --720,
-	inputHeight = 384, -- 576,
+--	batchSize = 1,
+	trainBatchSize = 1,
+	valBatchSize = 1,
 	rotMaxDegree = 0,
 	jointRadius = 20,
     toolJointNames = {'LeftClasperPoint', 'RightClasperPoint',
@@ -73,6 +73,10 @@ local opt = {
 					 },
 	nEpoches = 300
 }
+opt.jointRadius = opt.modelConf.jointRadius or 20
+opt.modelOutputScale = opt.modelConf.modelOutputScale or 4
+opt.inputWidth = opt.modelConf.inputWidth or 480  -- 720
+opt.inputHeight = opt.modelConf.inputHeight or 384 -- 576
 
 local detID = getSaveID(opt.detModelConf)
 local detModelPath = paths.concat(opt.saveDir, 'model.' .. detID .. '.best.t7')

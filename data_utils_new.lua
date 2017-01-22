@@ -74,6 +74,7 @@ function nmsPt(map, dist_thres, score_factor_thres)
     local non_zero_indices = peak_map:nonzero()
 
     if non_zero_indices:nElement() == 0 then return pick end
+    if non_zero_indices:size(1) > 10 then return pick end
 
     local peaks = torch.FloatTensor(non_zero_indices:size(1), 3)
     peaks[{{},{1,2}}] = non_zero_indices

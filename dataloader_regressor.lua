@@ -176,7 +176,7 @@ function DataLoader:load(job_type)
                         aug_frame, aug_annos = flipToolPosData(frame, aug_param.flip, frame_data.annotations)
                         aug_frame, aug_annos = rotateToolPos(aug_frame, aug_param.degree, aug_annos)
                         table.insert(frame_tab, aug_frame)
-                        -- note: joint map size is based on the model output: scale down 4 times
+                        -- note: joint map size is based on the model output: scale down 1or4 times
                         local heatmap = genSepHeatMap(aug_annos, jointNames, j_radius, aug_frame, model_output_scale)
                         frame_batch_map[{i, {1, jointNum}}] = heatmap:clone()
                         -- todo: paf heatmap generation
