@@ -697,7 +697,7 @@ function flipToolPosData(frame, flip, annotations)
     flipped_annos = deepCopy(annotations)
 
     if flip == 0 then
-        flipped_frame = frame:clone()
+        flipped_frame = frame
     else
         local frame_width = frame:size(3)
         flipped_frame = image.hflip(frame)

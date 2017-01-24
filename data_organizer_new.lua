@@ -103,8 +103,8 @@ local function genTestData(seq_info_tab)
     for seq_idx=1, seq_num do
         local seq_info = seq_info_tab[seq_idx]
         local frame_num = seq_info.endFrame - seq_info.startFrame + 1
-        local frame_anno = {}
         for frame_idx=1, frame_num do
+            local frame_anno = {}
             frame_anno.filename = paths.concat(seq_info.seqDir, string.format(seq_info.frameFormat, frame_idx))
             frame_anno.annotations = nil
             frame_anno.jointNum = nil
