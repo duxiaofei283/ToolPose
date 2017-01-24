@@ -93,7 +93,12 @@ function DataLoader:__init(opt)
     self.toolJointNames = opt.toolJointNames
     self.toolCompoNames = opt.toolCompoNames
     self.jointRadius = opt.jointRadius or 20
+    self.detJointRadius = opt.detJointRadius or 10
     self.modelOutputScale = opt.modelOutputScale or 4
+    self.normalScale = opt.normalScale or 1
+    print(string.format('Det Model radius = %f', self.detJointRadius))
+    print(string.format('Regression Model radius = %f', self.jointRadius))
+    print(string.format('Regression normalize scale = %f', self.normalScale))
 end
 
 function DataLoader:trainSize()
@@ -139,7 +144,9 @@ function DataLoader:load(job_type)
     local compoNames = self.toolCompoNames
 
     local j_radius = self.jointRadius
+    local det_j_radius = self.detJointRadius
     local model_output_scale = self.modelOutputScale
+    local normal_scale = self.normalScale
 
     local job_done = 0
     local idx = 1
@@ -177,10 +184,10 @@ function DataLoader:load(job_type)
                         aug_frame, aug_annos = rotateToolPos(aug_frame, aug_param.degree, aug_annos)
                         table.insert(frame_tab, aug_frame)
                         -- note: joint map size is based on the model output: scale down 1or4 times
-                        local heatmap = genSepHeatMap(aug_annos, jointNames, j_radius, aug_frame, model_output_scale)
+                        local heatmap = genSepHeatMap(aug_annos, jointNames, j_radius, det_j_radius, aug_frame, model_output_scale, normal_scale)
                         frame_batch_map[{i, {1, jointNum}}] = heatmap:clone()
                         -- todo: paf heatmap generation
-                        local compmap = genSepPAFMapReg(aug_annos, compoNames, j_radius, aug_frame, model_output_scale)
+                        local compmap = genSepPAFMapReg(aug_annos, compoNames, j_radius, det_j_radius, aug_frame, model_output_scale, normal_scale)
                         frame_batch_map[{i, {jointNum+1, -1}}] = compmap:clone()
 
 --                        local joint_norm_pos = getJointPos(aug_annos, jointNames, frame_data.toolNum)

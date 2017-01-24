@@ -69,12 +69,24 @@ function nmsPt(map, dist_thres, score_factor_thres)
     local peak_map3 = torch.gt(map_aug, map_aug3)
     local peak_map4 = torch.gt(map_aug, map_aug4)
 
-    peak_map1:cmul(peak_map2):cmul(peak_map3):cmul(peak_map4)
-    local peak_map = peak_map1[{{2,-2},{2,-2}}]
+    --    peak_map1:cmul(peak_map2):cmul(peak_map3):cmul(peak_map4)
+--    local peak_map = peak_map1[{{2,-2},{2,-2}}]
+
+    local peak_map1_ = torch.ge(map_aug, map_aug1)
+    local peak_map2_ = torch.ge(map_aug, map_aug2)
+    local peak_map3_ = torch.ge(map_aug, map_aug3)
+    local peak_map4_ = torch.ge(map_aug, map_aug4)
+    peak_map1_:cmul(peak_map2):cmul(peak_map3):cmul(peak_map4)
+    peak_map2_:cmul(peak_map1):cmul(peak_map3):cmul(peak_map4)
+    peak_map3_:cmul(peak_map1):cmul(peak_map2):cmul(peak_map4)
+    peak_map4_:cmul(peak_map1):cmul(peak_map2):cmul(peak_map3)
+    peak_map1_:add(peak_map2_):add(peak_map3_):add(peak_map4_):clamp(0,1)
+    local peak_map = peak_map1_[{{2,-2},{2,-2}}]
+
     local non_zero_indices = peak_map:nonzero()
 
     if non_zero_indices:nElement() == 0 then return pick end
-    if non_zero_indices:size(1) > 10 then return pick end
+    if non_zero_indices:size(1) > 50 then return pick end
 
     local peaks = torch.FloatTensor(non_zero_indices:size(1), 3)
     peaks[{{},{1,2}}] = non_zero_indices
@@ -447,11 +459,12 @@ function genSepPAFMapDet(annotations, toolCompoNames, side_thickness, frame, sca
     return paf_map
 end
 
-function genSepPAFMapReg(annotations, toolCompoNames, side_thickness, frame, scale)
-    if scale == nil or scale == 0 then
-        scale = 1
-    end
+function genSepPAFMapReg(annotations, toolCompoNames, side_thickness, det_side_thickness, frame, scale, normalise_scale)
+    if scale == nil or scale == 0 then scale = 1 end
+    if normalise_scale== nil or normalise_scale == 0 then normalise_scale = 1 end
     side_thickness =  side_thickness/scale
+    det_side_thickness = det_side_thickness/scale
+    local min_side_thickness = math.min(side_thickness, det_side_thickness)
     local frame_width = frame:size(3)
     local frame_height = frame:size(2)
     local pm_width = torch.floor(frame_width/scale)
@@ -477,7 +490,7 @@ function genSepPAFMapReg(annotations, toolCompoNames, side_thickness, frame, sca
                         local joint2_y = joint2_anno[joint2_tool_idx].y * frame_height/scale
 
                         -- generate paf points map
-                        local tool_comp = toolCompo(joint1_x, joint1_y, joint2_x, joint2_y, side_thickness)
+                        local tool_comp = toolCompo(joint1_x, joint1_y, joint2_x, joint2_y, min_side_thickness)
                         local min_vertex, max_vertex = tool_comp:getBoundingVertices()
                         local x_min = math.max(1, torch.round( min_vertex.x))
                         local x_max = math.min(pm_width, torch.round(max_vertex.x))
@@ -507,7 +520,7 @@ function genSepPAFMapReg(annotations, toolCompoNames, side_thickness, frame, sca
     end
 
     -- normalize?
-    paf_map = torch.div(paf_map, paf_map:max())
+    paf_map = normalise_scale * torch.div(paf_map, paf_map:max())
     return paf_map
 end
 
@@ -600,9 +613,11 @@ function genHeatMap(ptx, pty, sigma, frame)
 end
 
 -- normalized ptx and pty
-function genSepHeatMap(annotations, jointNames, sigma, frame, scale)
+function genSepHeatMap(annotations, jointNames, sigma, det_radius, frame, scale, normalise_scale)
     if scale == nil or scale == 0 then scale = 1 end
+    if normalise_scale== nil or normalise_scale == 0 then normalise_scale = 1 end
     sigma = sigma / scale
+    det_radius = det_radius / scale
     local frame_height = frame:size(2)
     local frame_width = frame:size(3)
     local hm_height = torch.floor(frame_height/scale)
@@ -610,6 +625,7 @@ function genSepHeatMap(annotations, jointNames, sigma, frame, scale)
     local joint_num = #jointNames
     local heatmap = torch.FloatTensor(joint_num, hm_height, hm_width):fill(0)
     local r = 2
+    local range = math.min(det_radius, r * sigma)
     local sigma_matrix = torch.eye(2) * sigma
 
     local x_min, x_max, y_min, y_max
@@ -621,10 +637,10 @@ function genSepHeatMap(annotations, jointNames, sigma, frame, scale)
                 local joint_y = joint_anno[tool_idx].y * frame_height/scale
                 local mu = torch.FloatTensor({joint_x, joint_y})
 
-                x_min = math.max(1, torch.floor(joint_x - r * sigma))
-                x_max = math.min(hm_width, torch.ceil(joint_x + r * sigma))
-                y_min = math.max(1, torch.floor(joint_y - r * sigma))
-                y_max = math.min(hm_height, torch.ceil(joint_y + r * sigma))
+                x_min = math.max(1, torch.floor(joint_x - range))
+                x_max = math.min(hm_width, torch.ceil(joint_x + range))
+                y_min = math.max(1, torch.floor(joint_y - range))
+                y_max = math.min(hm_height, torch.ceil(joint_y + range))
 
                 for i=x_min, x_max do
                     for j=y_min, y_max do
@@ -639,7 +655,7 @@ function genSepHeatMap(annotations, jointNames, sigma, frame, scale)
     end
 
     -- normalize?
-    heatmap = torch.div(heatmap, heatmap:max())
+    heatmap = normalise_scale * torch.div(heatmap, heatmap:max())
 
     return heatmap
 end

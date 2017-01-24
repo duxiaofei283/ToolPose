@@ -56,14 +56,14 @@ local opt = {
 --    detModelConf = {type='toolDualPoseSep', v=1, jointRadius=20, modelOutputScale=4},
 --	modelConf = {type='toolPoseRegress', v=1, jointRadius = 20, modelOutputScale=4},
 	detModelConf = {type='toolPartDetFull', v=1, jointRadius=10, modelOutputScale=1, inputWidth=320, inputHeight=256},
-	modelConf = {type='toolPoseRegressFull', v=2, jointRadius=10, modelOutputScale=1, inputWidth=320, inputHeight=256},
+	modelConf = {type='toolPoseRegressFull', v=2, jointRadius=10, modelOutputScale=1, inputWidth=320, inputHeight=256, normalScale=10},
+--	modelConf = {type='toolPoseRegressFull', v=4, jointRadius=20, modelOutputScale=1, inputWidth=320, inputHeight=256, normalScale=10},
 	gpus = {1},
 	nThreads = 6,
 --	batchSize = 1,
 	trainBatchSize = 1,
 	valBatchSize = 1,
 	rotMaxDegree = 0,
-	jointRadius = 20,
     toolJointNames = {'LeftClasperPoint', 'RightClasperPoint',
                           'HeadPoint', 'ShaftPoint', 'EndPoint' }, -- joint number = 5
 	toolCompoNames = {{'LeftClasperPoint', 'HeadPoint'},
@@ -73,10 +73,12 @@ local opt = {
 					 },
 	nEpoches = 300
 }
-opt.jointRadius = opt.modelConf.jointRadius or 20
+opt.inputWidth = opt.modelConf.inputWidth or 320 -- 480  -- 720
+opt.inputHeight = opt.modelConf.inputHeight or 256 -- 384 -- 576
 opt.modelOutputScale = opt.modelConf.modelOutputScale or 4
-opt.inputWidth = opt.modelConf.inputWidth or 480  -- 720
-opt.inputHeight = opt.modelConf.inputHeight or 384 -- 576
+opt.detJointRadius = opt.detModelConf.jointRadius or 10
+opt.jointRadius = opt.modelConf.jointRadius or 20
+opt.normalScale = opt.modelConf.normalScale or 1
 
 local detID = getSaveID(opt.detModelConf)
 local detModelPath = paths.concat(opt.saveDir, 'model.' .. detID .. '.best.t7')

@@ -47,7 +47,7 @@ end
 local opt = {
 	dataDir = dataDir,
 	saveDir = saveDir,
-	retrain = nil, -- nil, 'last' or 'best'
+	retrain = 'last', -- nil, 'last' or 'best'
 	learningRate = 1e-3,  -- old 1e-5
 	momentum = 0.99,
 	weightDecay = 0.0005, -- old 0.0005
@@ -55,7 +55,8 @@ local opt = {
 	updateIternal = 10,
 --	modelConf = {type='toolDualPoseSep', v=1, jointRadius=20, modelOutputScale=4, inputWidth=480, inputHeight=384},
 --	modelConf = {type='toolPartDet', v=1, jointRadius=10, modelOutputScale=4, inputWidth=480, inputHeight=384},
-	modelConf = {type='toolPartDetFull', v=1, jointRadius=10, modelOutputScale=1, inputWidth=320, inputHeight=256},
+--	modelConf = {type='toolPartDetFull', v=1, jointRadius=10, modelOutputScale=1, inputWidth=320, inputHeight=256},
+	modelConf = {type='toolPartDetFull', v='192*240', jointRadius=5, modelOutputScale=1, inputWidth=240, inputHeight=192},
 	gpus = {1},
 	nThreads = 6,
 --	batchSize = 1,  --  examples seems to be the maximum setting for one GPU
