@@ -91,8 +91,11 @@ local function toolPoseEstimate(opt, result_dir, data_type)
     local batch_size = opt.batchSize or 1
     local sample_batches = math.floor(#data_tab / batch_size)
     local data_samples = sample_batches * batch_size
-    data_samples = 100
-    local order = torch.range(1, data_samples) + 100
+    local data_start_idx = 1500
+    local data_test_step = 10
+    data_samples = 150
+
+    local order = torch.range(1, data_samples*data_test_step, data_test_step) + data_start_idx
 
     local inputsGPU = torch.CudaTensor(batch_size, 3+toolJointNum+toolCompoNum, input_height, input_width)
     local idx = 1
