@@ -6,12 +6,14 @@ require 'xlua'
 require 'image'
 local optim = require('optim')
 local matio = require 'matio'
-local DataLoader = require 'dataloader_regressor'
+local DataLoader = require 'dataloader_invivo'
 
 torch.setdefaulttensortype('torch.FloatTensor')
 
-local ORIGIN_FRAME_HEIGHT = 576
-local ORIGIN_FRAME_WIDTH = 720
+local OLD_ORIGIN_FRAME_HEIGHT = 576
+local OLD_ORIGIN_FRAME_WIDTH = 720
+local NEW_ORIGIN_FRAME_HEIGHT = 1080 --576
+local NEW_ORIGIN_FRAME_WIDTH = 1920 --720
 
 -- frames       [b,c=3,H,W]
 -- gt_jtmaps    [b,c=1,h,w]
@@ -96,37 +98,52 @@ local function JointPrecision(gt_joints_anno, outputs_map, joint_names, dist_thr
         for i=1, #joint_names do
             local joint_map = outputs_map[bidx][i]
             local output_peaks = nmsPt(joint_map, dist_thres, score_factor_thres)
-            for pidx=1, #output_peaks do
---                print(output_peaks[pidx][1], output_peaks[pidx][2])
-                output_peaks[pidx][1] = output_peaks[pidx][1] / output_height * ORIGIN_FRAME_HEIGHT
-                output_peaks[pidx][2] = output_peaks[pidx][2] / output_width * ORIGIN_FRAME_WIDTH
-            end
+--            for pidx=1, #output_peaks do
+----                print(output_peaks[pidx][1], output_peaks[pidx][2])
+--                output_peaks[pidx][1] = output_peaks[pidx][1] / output_height * ORIGIN_FRAME_HEIGHT
+--                output_peaks[pidx][2] = output_peaks[pidx][2] / output_width * ORIGIN_FRAME_WIDTH
+--            end
             table.insert(output_peaks_tab, output_peaks)
         end
         table.insert(batch_output_peaks_tab, output_peaks_tab)
     end
 
-    local dist_tab = {}
+    local dist_tab, frame_width, frame_height
+    local old_dist_tab = {}
+    local new_dist_tab = {}
     for i=1, #joint_names do
-        table.insert(dist_tab, {})
+        table.insert(old_dist_tab, {})
+        table.insert(new_dist_tab, {})
     end
 
     for bidx=1, batch_size do
-        local frame_anno = gt_joints_anno[bidx]
+        local frame_anno = gt_joints_anno[bidx].anno
+        local frame_class = gt_joints_anno[bidx].class
+
+        if frame_class == 1 then
+            dist_tab = old_dist_tab
+            frame_width = OLD_ORIGIN_FRAME_WIDTH
+            frame_height = OLD_ORIGIN_FRAME_HEIGHT
+        elseif frame_class == 2 then
+            dist_tab = new_dist_tab
+            frame_width = NEW_ORIGIN_FRAME_WIDTH
+            frame_height = NEW_ORIGIN_FRAME_HEIGHT
+        end
+
         for i=1, #joint_names do
             local joint_anno = frame_anno[joint_names[i]]
             if joint_anno ~= nil then
                 local output_peaks = batch_output_peaks_tab[bidx][i]
                 for tool_idx=1, #joint_anno do
-                    local gt_joint_x = joint_anno[tool_idx].x * ORIGIN_FRAME_WIDTH
-                    local gt_joint_y = joint_anno[tool_idx].y * ORIGIN_FRAME_HEIGHT
+                    local gt_joint_x = joint_anno[tool_idx].x * frame_width
+                    local gt_joint_y = joint_anno[tool_idx].y * frame_height
 --                    print(string.format('gtx=%f, gty=%f', gt_joint_x, gt_joint_y))
                     -- compute the distance
                     local dist = 1e+8
                     local chosen_result_x, chosen_result_y = -1, -1
                     for pidx=1, #output_peaks do
-                        local result_joint_x = output_peaks[pidx][2]
-                        local result_joint_y = output_peaks[pidx][1]
+                        local result_joint_x = output_peaks[pidx][2] / output_width * frame_width
+                        local result_joint_y = output_peaks[pidx][1] / output_height * frame_height
 --                        print(string.format('rex=%f, rey=%f', result_joint_x, result_joint_y))
                         local d = math.sqrt(math.pow(gt_joint_x-result_joint_x,2)+math.pow(gt_joint_y-result_joint_y,2))
                         if d < dist then
@@ -152,15 +169,27 @@ local function JointPrecision(gt_joints_anno, outputs_map, joint_names, dist_thr
     end
 
     -- average dist
-    local avg_dist_tab = {}
-    for i=1, #dist_tab do
+    local old_avg_dist_tab = {}
+    for i=1, #old_dist_tab do
         local avg_dist = 0.0
-        local joint_disttab = dist_tab[i]
+        local joint_disttab = old_dist_tab[i]
         for j=1, #joint_disttab do
             avg_dist = avg_dist + joint_disttab[j]
         end
         if #joint_disttab ~= 0 then avg_dist = avg_dist / #joint_disttab end
-        table.insert(avg_dist_tab, avg_dist)
+        table.insert(old_avg_dist_tab, avg_dist)
+--        print(string.format('%s average precision dist = %.2f',joint_names[i], avg_dist))
+    end
+
+    local new_avg_dist_tab = {}
+    for i=1, #new_dist_tab do
+        local avg_dist = 0.0
+        local joint_disttab = new_dist_tab[i]
+        for j=1, #joint_disttab do
+            avg_dist = avg_dist + joint_disttab[j]
+        end
+        if #joint_disttab ~= 0 then avg_dist = avg_dist / #joint_disttab end
+        table.insert(new_avg_dist_tab, avg_dist)
 --        print(string.format('%s average precision dist = %.2f',joint_names[i], avg_dist))
     end
 
@@ -170,7 +199,7 @@ local function JointPrecision(gt_joints_anno, outputs_map, joint_names, dist_thr
 --    end
 --    avgdist = avgdist / #avg_dist_tab
 --    return avg_dist_tab
-    return avg_dist_tab
+    return old_avg_dist_tab, new_avg_dist_tab
 end
 
 local M = {}
@@ -258,10 +287,15 @@ function Runner:train(epoch)
     local size = self.dataLoader:trainSize()
     local loss = 0.0
     local acc = 0.0
-    local prec_tab = {}
+    local old_acc = 0.0
+    local new_acc = 0.0
+    local old_prec_tab = {}
+    local new_prec_tab = {}
     for i=1, #self.toolJointNames do
-        table.insert(prec_tab, 0.0)
+        table.insert(old_prec_tab, 0.0)
+        table.insert(new_prec_tab, 0.0)
     end
+
     local N = 0
 
     self.model:training()
@@ -273,7 +307,6 @@ function Runner:train(epoch)
         -- load data
         dataTime = dataTime + dataTimer:time().real
         -- transfer over to GPU
---        self.framesGPU:resize(framesCPU:size()):copy(framesCPU)
         self.mapsGPU:resize(mapsCPU:size()):copy(mapsCPU)
 
         -- todo: deal with then outputscale ~= 1
@@ -303,12 +336,28 @@ function Runner:train(epoch)
         local batch_acc = torch.eq(torch.round(outputsGPU/self.normalScale), torch.round(self.mapsGPU/self.normalScale)):sum() / self.mapsGPU:nElement()
         acc = acc + batch_acc
 
+        -- acc for old or new data
+        local old_batch_acc, new_batch_acc = 0.0, 0.0
+        local old_num, new_num = 0, 0
+        for idx=1, #jointAnnoTab do
+            if jointAnnoTab[idx].class == 1 then -- old
+                old_batch_acc = old_batch_acc + torch.eq(torch.round(outputsGPU[idx]/self.normalScale), torch.round(self.mapsGPU[idx]/self.normalScale)):sum() / self.mapsGPU[idx]:nElement()
+                old_num = old_num + 1
+            else
+                new_batch_acc = new_batch_acc + torch.eq(torch.round(outputsGPU[idx]/self.normalScale), torch.round(self.mapsGPU[idx]/self.normalScale)):sum() / self.mapsGPU[idx]:nElement()
+                new_num = new_num + 1
+            end
+        end
+        old_acc = old_acc + old_batch_acc/old_num
+        new_acc = new_acc + new_batch_acc/new_num
+
         -- accumulate precision
-        local batch_prec = {}
-        for i=1, #self.toolJointNames do table.insert(batch_prec, -1) end
-        batch_prec = JointPrecision(jointAnnoTab, outputsGPU, self.toolJointNames, self.detJointRadius)
+        local old_batch_prec, new_batch_prec = {}, {}
+        for i=1, #self.toolJointNames do table.insert(old_batch_prec, -1) table.insert(new_batch_prec, -1) end
+        old_batch_prec, new_batch_prec = JointPrecision(jointAnnoTab, outputsGPU, self.toolJointNames, self.detJointRadius)
         for i=1, #self.toolJointNames do
-            prec_tab[i] = prec_tab[i] + batch_prec[i]
+            old_prec_tab[i] = old_prec_tab[i] + old_batch_prec[i]
+            new_prec_tab[i] = new_prec_tab[i] + new_batch_prec[i]
         end
         N = N + 1
 
@@ -317,7 +366,7 @@ function Runner:train(epoch)
 --            print(self.inputsGPU:max())
             print(mapsCPU:max())
             print(outputsGPU:max())
-            saveMatResult(framesCPU, mapsCPU, self.inputsGPU[{{},{4,-1}}], outputsGPU, self.toolJointNames, self.toolCompoNames,'/home/xiaofei/workspace/toolPose/regress_results/train')
+            saveMatResult(framesCPU, mapsCPU, self.inputsGPU[{{},{4,-1}}], outputsGPU, self.toolJointNames, self.toolCompoNames,'/home/xiaofei/workspace/toolPose/invivo_regress_results/train')
         end
 
         -- check that the storage didn't get changed due to an unfortunate getParameters call
@@ -336,18 +385,28 @@ function Runner:train(epoch)
     -- calculate loss, acc
     loss = loss / N
     acc = acc * 100 / N
+    old_acc = old_acc * 100 / N
+    new_acc = new_acc * 100 / N
 
-    local prec = 0.0 -- average joint prec
+    local old_prec = 0.0 -- average joint prec
     for i=1, #self.toolJointNames do
-        prec_tab[i] = prec_tab[i] / N
-        print(string.format('%s average precision dist = %.2f',self.toolJointNames[i], prec_tab[i]))
-        prec = prec + prec_tab[i]
+        old_prec_tab[i] = old_prec_tab[i] / N
+        print(string.format('%s OLD average precision dist = %.2f',self.toolJointNames[i], old_prec_tab[i]))
+        old_prec = old_prec + old_prec_tab[i]
     end
-    prec = prec / #self.toolJointNames
+    old_prec = old_prec / #self.toolJointNames
+
+    local new_prec = 0.0 -- average joint prec
+    for i=1, #self.toolJointNames do
+        new_prec_tab[i] = new_prec_tab[i] / N
+        print(string.format('%s NEW average precision dist = %.2f',self.toolJointNames[i], new_prec_tab[i]))
+        new_prec = new_prec + new_prec_tab[i]
+    end
+    new_prec = new_prec / #self.toolJointNames
 
     print("\nTrain : time to learn = " .. timer:time().real .. ' sec')
 	print("Train : time to load data = " .. dataTime .. ' sec')
-    return acc, loss, prec
+    return acc, loss, old_prec, new_prec, old_acc, new_acc
 end
 
 function Runner:val(epoch)
@@ -357,9 +416,13 @@ function Runner:val(epoch)
     local size = self.dataLoader:valSize()
     local loss = 0.0
     local acc = 0.0
-    local prec_tab = {}
+    local old_acc = 0.0
+    local new_acc = 0.0
+    local old_prec_tab = {}
+    local new_prec_tab = {}
     for i=1, #self.toolJointNames do
-        table.insert(prec_tab, 0.0)
+        table.insert(old_prec_tab, 0.0)
+        table.insert(new_prec_tab, 0.0)
     end
     local N = 0
 
@@ -392,12 +455,29 @@ function Runner:val(epoch)
         local batch_acc = torch.eq(torch.round(outputsGPU/self.normalScale), torch.round(self.mapsGPU/self.normalScale)):sum() / self.mapsGPU:nElement()
         acc = acc + batch_acc
 
+        -- acc for old or new data
+        local old_batch_acc, new_batch_acc = 0.0, 0.0
+        local old_num, new_num = 0, 0
+        for idx = 1, #jointAnnoTab do
+            if jointAnnoTab[idx].class == 1 then -- old
+                old_batch_acc = old_batch_acc + torch.eq(torch.round(outputsGPU[idx]/self.normalScale), torch.round(self.mapsGPU[idx]/self.normalScale)):sum() / self.mapsGPU[idx]:nElement()
+                old_num = old_num + 1
+            else
+                new_batch_acc = new_batch_acc + torch.eq(torch.round(outputsGPU[idx]/self.normalScale), torch.round(self.mapsGPU[idx]/self.normalScale)):sum() / self.mapsGPU[idx]:nElement()
+                new_num = new_num + 1
+            end
+        end
+        old_acc = old_acc + old_batch_acc/old_num
+        new_acc = new_acc + new_batch_acc/new_num
+
+
         -- accumulate precision
-        local batch_prec = {}
-        for i=1, #self.toolJointNames do table.insert(batch_prec, -1) end
-        batch_prec = JointPrecision(jointAnnoTab, outputsGPU, self.toolJointNames, self.detJointRadius)
+        local old_batch_prec, new_batch_prec = {}, {}
+        for i=1, #self.toolJointNames do table.insert(old_batch_prec, -1) table.insert(new_batch_prec, -1) end
+        old_batch_prec, new_batch_prec = JointPrecision(jointAnnoTab, outputsGPU, self.toolJointNames, self.detJointRadius)
         for i=1, #self.toolJointNames do
-            prec_tab[i] = prec_tab[i] + batch_prec[i]
+            old_prec_tab[i] = old_prec_tab[i] + old_batch_prec[i]
+            new_prec_tab[i] = new_prec_tab[i] + new_batch_prec[i]
         end
 
         N = N + 1
@@ -407,7 +487,7 @@ function Runner:val(epoch)
         if n == framesCPU:size(1) then
             print(mapsCPU:max())
             print(outputsGPU:max())
-            saveMatResult(framesCPU, mapsCPU, self.inputsGPU[{{},{4,-1}}], outputsGPU, self.toolJointNames, self.toolCompoNames, '/home/xiaofei/workspace/toolPose/regress_results/val')
+            saveMatResult(framesCPU, mapsCPU, self.inputsGPU[{{},{4,-1}}], outputsGPU, self.toolJointNames, self.toolCompoNames, '/home/xiaofei/workspace/toolPose/invivo_regress_results/val')
         end
 
         xlua.progress(n, size)
@@ -419,17 +499,28 @@ function Runner:val(epoch)
     -- calculate loss, acc
     loss = loss / N
     acc = acc * 100 / N
-    local prec = 0.0 -- average joint prec
+    old_acc = old_acc * 100 / N
+    new_acc = new_acc * 100 / N
+
+    local old_prec = 0.0 -- average joint prec
     for i=1, #self.toolJointNames do
-        prec_tab[i] = prec_tab[i] / N
-        print(string.format('%s average precision dist = %.2f',self.toolJointNames[i], prec_tab[i]))
-        prec = prec + prec_tab[i]
+        old_prec_tab[i] = old_prec_tab[i] / N
+        print(string.format('%s OLD average precision dist = %.2f',self.toolJointNames[i], old_prec_tab[i]))
+        old_prec = old_prec + old_prec_tab[i]
     end
-    prec = prec / #self.toolJointNames
+    old_prec = old_prec / #self.toolJointNames
+
+    local new_prec = 0.0 -- average joint prec
+    for i=1, #self.toolJointNames do
+        new_prec_tab[i] = new_prec_tab[i] / N
+        print(string.format('%s NEW average precision dist = %.2f',self.toolJointNames[i], new_prec_tab[i]))
+        new_prec = new_prec + new_prec_tab[i]
+    end
+    new_prec = new_prec / #self.toolJointNames
 
     print("\nVal : time to predict = " .. timer:time().real .. ' sec')
 	print("Val : time to load data = " .. dataTime .. ' sec')
-    return acc, loss, prec
+    return acc, loss, old_prec, new_prec, old_acc, new_acc
 end
 
 function Runner:test(epoch)
@@ -466,7 +557,7 @@ function Runner:test(epoch)
 
         -- visualize result for debugging
         if n == framesCPU:size(1) then
-            saveMatResult(framesCPU, mapsCPU, self.inputsGPU[{{},{4,-1}}], outputsGPU, self.toolJointNames, self.toolCompoNames, '/home/xiaofei/workspace/toolPose/regress_results/test')
+            saveMatResult(framesCPU, mapsCPU, self.inputsGPU[{{},{4,-1}}], outputsGPU, self.toolJointNames, self.toolCompoNames, '/home/xiaofei/workspace/toolPose/invivo_regress_results/test')
         end
 
         xlua.progress(n, size)
@@ -485,3 +576,4 @@ function Runner:test(epoch)
 end
 
 return M.Runner
+

@@ -1,0 +1,3 @@
+require 'nn'
+torch.setdefaulttensortype('')
+

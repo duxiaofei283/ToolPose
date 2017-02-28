@@ -1,3 +1,4 @@
+-- the input of the regression network are perfect output of the detection network
 require 'nn'
 require 'cunn'
 require 'cudnn'
@@ -6,7 +7,7 @@ require 'xlua'
 require 'image'
 local optim = require('optim')
 local matio = require 'matio'
-local DataLoader = require 'dataloader_regressor'
+local DataLoader = require 'dataloader_regressor_perfectinput'
 
 torch.setdefaulttensortype('torch.FloatTensor')
 
@@ -135,16 +136,16 @@ local function JointPrecision(gt_joints_anno, outputs_map, joint_names, dist_thr
                             chosen_result_y = result_joint_y
                         end
                     end
---                    if dist > 20 and dist < 1e+8 then
---                        print('')
---                        print(joint_names[i])
---                        for pidx=1, #output_peaks do
---                            print(string.format('candis:[%d, %d]', output_peaks[pidx][2], output_peaks[pidx][1]))
---                        end
---                        print(string.format('gt:    [%d, %d]', gt_joint_x, gt_joint_y))
---                        print(string.format('result:[%d, %d]', chosen_result_x, chosen_result_y))
---                        print(string.format('dist = %.2f', dist))
---                    end
+                    if dist > 20 and dist < 1e+8 then
+                        print('')
+                        print(joint_names[i])
+                        for pidx=1, #output_peaks do
+                            print(string.format('candis:[%d, %d]', output_peaks[pidx][2], output_peaks[pidx][1]))
+                        end
+                        print(string.format('gt:    [%d, %d]', gt_joint_x, gt_joint_y))
+                        print(string.format('result:[%d, %d]', chosen_result_x, chosen_result_y))
+                        print(string.format('dist = %.2f', dist))
+                    end
                     table.insert(dist_tab[i], dist)
                 end
             end
@@ -269,7 +270,7 @@ function Runner:train(epoch)
     local function feval()
         return self.criterion.output, self.gradParams
     end
-    for n, framesCPU, mapsCPU, jointAnnoTab in self.dataLoader:load(1) do
+    for n, framesCPU, detmapsCPU, mapsCPU, jointAnnoTab in self.dataLoader:load(1) do
         -- load data
         dataTime = dataTime + dataTimer:time().real
         -- transfer over to GPU
@@ -282,13 +283,13 @@ function Runner:train(epoch)
 
         -- reset gradparameters
         self.gradParams:zero()
+
         -- forward
---        local jointsGPU = self.detModel:forward(self.framesGPU)
-
---        self.inputsGPU[{{},{4,-1}}] = self.detModel:forward(self.inputsGPU[{{},{1,3}}])
-
-        -- test
-        self.inputsGPU[{{},{4,-1}}] = self.detModel:forward(self.inputsGPU[{{},{1,3}}])
+        if detmapsCPU == nil then
+            self.inputsGPU[{{},{4,-1}}] = self.detModel:forward(self.inputsGPU[{{},{1,3}}])
+        else
+            self.inputsGPU[{{},{4,-1}}]:copy(detmapsCPU)
+        end
 
         local outputsGPU = self.model:forward(self.inputsGPU)
         local loss_batch = self.criterion:forward(outputsGPU, self.mapsGPU)
@@ -317,7 +318,7 @@ function Runner:train(epoch)
 --            print(self.inputsGPU:max())
             print(mapsCPU:max())
             print(outputsGPU:max())
-            saveMatResult(framesCPU, mapsCPU, self.inputsGPU[{{},{4,-1}}], outputsGPU, self.toolJointNames, self.toolCompoNames,'/home/xiaofei/workspace/toolPose/regress_results/train')
+            saveMatResult(framesCPU, mapsCPU, self.inputsGPU[{{},{4,-1}}], outputsGPU, self.toolJointNames, self.toolCompoNames,'/home/xiaofei/workspace/toolPose/perfect_regress_results/train')
         end
 
         -- check that the storage didn't get changed due to an unfortunate getParameters call
@@ -366,7 +367,7 @@ function Runner:val(epoch)
     self.model:evaluate()
 
 
-    for n, framesCPU, mapsCPU, jointAnnoTab in self.dataLoader:load(2) do
+    for n, framesCPU, detmapsCPU, mapsCPU, jointAnnoTab in self.dataLoader:load(2) do
         -- load data
         dataTime = dataTime + dataTimer:time().real
         -- transfer over to GPU
@@ -378,12 +379,11 @@ function Runner:val(epoch)
         self.inputsGPU[{{},{1,3}}]:copy(framesCPU)
 
         -- forward
---        local jointsGPU = self.detModel:forward(self.framesGPU)
-
---        self.inputsGPU[{{},{4,-1}}] = self.detModel:forward(self.inputsGPU[{{},{1,3}}])
-
-        -- test
-        self.inputsGPU[{{},{4,-1}}] = self.detModel:forward(self.inputsGPU[{{},{1,3}}])
+        if detmapsCPU == nil then
+            self.inputsGPU[{{},{4,-1}}] = self.detModel:forward(self.inputsGPU[{{},{1,3}}])
+        else
+            self.inputsGPU[{{},{4,-1}}]:copy(detmapsCPU)
+        end
 
         local outputsGPU = self.model:forward(self.inputsGPU)
         local loss_batch = self.criterion:forward(outputsGPU, self.mapsGPU)
@@ -407,7 +407,7 @@ function Runner:val(epoch)
         if n == framesCPU:size(1) then
             print(mapsCPU:max())
             print(outputsGPU:max())
-            saveMatResult(framesCPU, mapsCPU, self.inputsGPU[{{},{4,-1}}], outputsGPU, self.toolJointNames, self.toolCompoNames, '/home/xiaofei/workspace/toolPose/regress_results/val')
+            saveMatResult(framesCPU, mapsCPU, self.inputsGPU[{{},{4,-1}}], outputsGPU, self.toolJointNames, self.toolCompoNames, '/home/xiaofei/workspace/toolPose/perfect_regress_results/val')
         end
 
         xlua.progress(n, size)
@@ -443,7 +443,7 @@ function Runner:test(epoch)
 
     self.model:evaluate()
 
-    for n, framesCPU, mapsCPU in self.dataLoader:load(3) do
+    for n, framesCPU, detmapsCPU, mapsCPU in self.dataLoader:load(3) do
         -- load data
         dataTime = dataTime + dataTimer:time().real
         -- transfer over to GPU
@@ -454,19 +454,19 @@ function Runner:test(epoch)
         self.inputsGPU[{{},{1,3}}]:copy(framesCPU)
 
         -- forward
---        local jointsGPU = self.detModel:forward(self.framesGPU)
+        if detmapsCPU == nil then
+            self.inputsGPU[{{},{4,-1}}] = self.detModel:forward(self.inputsGPU[{{},{1,3}}])
+        else
+            self.inputsGPU[{{},{4,-1}}]:copy(detmapsCPU)
+        end
 
---        self.inputsGPU[{{},{4,-1}}] = self.detModel:forward(self.inputsGPU[{{},{1,3}}])
-
-        -- test
-        self.inputsGPU[{{},{4,-1}}] = self.detModel:forward(self.inputsGPU[{{},{1,3}}])
 
         local outputsGPU = self.model:forward(self.inputsGPU)
         N = N + 1
 
         -- visualize result for debugging
         if n == framesCPU:size(1) then
-            saveMatResult(framesCPU, mapsCPU, self.inputsGPU[{{},{4,-1}}], outputsGPU, self.toolJointNames, self.toolCompoNames, '/home/xiaofei/workspace/toolPose/regress_results/test')
+            saveMatResult(framesCPU, mapsCPU, self.inputsGPU[{{},{4,-1}}], outputsGPU, self.toolJointNames, self.toolCompoNames, '/home/xiaofei/workspace/toolPose/perfect_regress_results/test')
         end
 
         xlua.progress(n, size)
@@ -485,3 +485,4 @@ function Runner:test(epoch)
 end
 
 return M.Runner
+

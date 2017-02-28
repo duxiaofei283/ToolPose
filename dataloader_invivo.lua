@@ -11,98 +11,124 @@ function DataLoader:__init(opt)
     self.trainBatchSize = opt.trainBatchSize or opt.batchSize or 1
     self.valBatchSize = opt.valBatchSize or opt.batchSize or 1
     self.testBatchSize = opt.testBatchSize or opt.batchSize or 1
-    -- get data
-    local train_data_tab, val_data_tab, test_data_tab
---    local train_data_file = paths.concat(opt.dataDir, 'train_endo_toolpos_head.t7')
-    local train_data_file = paths.concat(opt.dataDir, 'train_random_toolpos_head.t7')
-    if paths.filep(train_data_file) then
-        train_data_tab = torch.load(train_data_file)
-    else
-        error('no such file: ' .. train_data_file)
-    end
---    local val_data_file = paths.concat(opt.dataDir, 'val_endo_toolpos_head.t7')
-    local val_data_file = paths.concat(opt.dataDir, 'val_random_toolpos_head.t7')
-    if paths.filep(val_data_file) then
-        val_data_tab = torch.load(val_data_file)
-    else
-        error('no such file: ' .. val_data_file)
-    end
+
+    -- get original data
+    local old_train_data_tab, old_val_data_tab, test_data_tab
+    local train_data_file = paths.concat(opt.oldDataDir, 'train_endo_toolpos_head.t7')
+    if paths.filep(train_data_file) then old_train_data_tab = torch.load(train_data_file) else error('no such file: ' .. train_data_file) end
+    local val_data_file = paths.concat(opt.oldDataDir, 'val_endo_toolpos_head.t7')
+    if paths.filep(val_data_file) then old_val_data_tab = torch.load(val_data_file) else error('no such file: ' .. val_data_file) end
 
     -- train with the whole training dataset
-    if opt.trainStyle ~= nil then
-        for i=1, #val_data_tab do table.insert(train_data_tab, val_data_tab[i]) end
-        val_data_tab = nil
-        val_data_tab = train_data_tab
-    end
+    for i=1, #old_val_data_tab do table.insert(old_train_data_tab, old_val_data_tab[i]) end
+    old_val_data_tab = nil
+    old_val_data_tab = old_train_data_tab
 
-    local test_data_file = paths.concat(opt.dataDir, 'test_endo_frames.t7')
-    if paths.filep(test_data_file) then
-        test_data_tab = torch.load(test_data_file)
-    else
-        error('no such file: ' .. test_data_file)
-    end
+    -- get finetune data
+    self.dataType = opt.dataType or 'invivo'
+    local new_train_data_tab, new_val_data_tab
+    train_data_file = paths.concat(opt.newDataDir, string.format('train_%s_toolpos.t7', self.dataType))
+    if paths.filep(train_data_file) then new_train_data_tab = torch.load(train_data_file) else error('no such file: ' .. train_data_file) end
+    val_data_file = paths.concat(opt.newDataDir, string.format('val_%s_toolpos.t7', self.dataType))
+    if paths.filep(val_data_file) then new_val_data_tab = torch.load(val_data_file) else error('no such file: ' .. val_data_file) end
+
+
+    local test_data_file = paths.concat(opt.newDataDir, string.format('test_%s_frames.t7', self.dataType))
+    if paths.filep(test_data_file) then test_data_tab = torch.load(test_data_file) else error('no such file: ' .. test_data_file) end
     self.testDataTab = test_data_tab
 
-    self.rotMaxDegree = opt.rotMaxDegree or 20
-    -- rotation and flip to augment data
+
+    -- flip to augment data
     self.vflip = opt.vflip or 0
     self.hflip = opt.hflip or 0
 
-    -- construct aug data and the rotation and flip parameter table for training data
-    self.augTrainParamTab = {}
-    self.trainDataTab = {}
-    for i=1, #train_data_tab do
-        for deg = -1 * self.rotMaxDegree, self.rotMaxDegree do
+    -- construct aug data and the flip parameter table for training data
+    self.oldAugTrainParamTab = {}
+    self.oldTrainDataTab = {}
+    for i=1, #old_train_data_tab do
+        for deg = -1*0, 0 do
             for vflip = 0, self.vflip do
                 for hflip = 0, self.hflip do
-                    table.insert(self.trainDataTab, train_data_tab[i])
-                    table.insert(self.augTrainParamTab, {degree=deg, vflip=vflip, hflip=hflip})
+                    table.insert(self.oldTrainDataTab, old_train_data_tab[i])
+                    table.insert(self.oldAugTrainParamTab, {degree=deg, vflip=vflip, hflip=hflip})
                 end
             end
         end
     end
-    self.augValParamTab = {}
-    self.valDataTab = {}
-    for i=1, #val_data_tab do
+    self.oldAugValParamTab = {}
+    self.oldValDataTab = {}
+    for i=1, #old_val_data_tab do
         for deg = -1 * 0, 0 do
             for vflip = 0, 0 do
                 for hflip = 0, 0 do
-                    table.insert(self.valDataTab, val_data_tab[i])
-                    table.insert(self.augValParamTab, {degree=deg, vflip=vflip, hflip=hflip})
+                    table.insert(self.oldValDataTab, old_val_data_tab[i])
+                    table.insert(self.oldAugValParamTab, {degree=deg, vflip=vflip, hflip=hflip})
                 end
             end
         end
     end
 
-    print(string.format('Generate %d train Samples', #train_data_tab))
-    print(string.format('Augmented into %d samples', #self.trainDataTab))
-    print(string.format('Generate %d val Samples' , #val_data_tab))
-    print(string.format('Augmented into %d samples', #self.valDataTab))
+    print(string.format('OLD: Generate %d train Samples', #old_train_data_tab))
+    print(string.format('OLD: Augmented into %d samples', #self.oldTrainDataTab))
+    print(string.format('OLD: Generate %d val Samples' , #old_val_data_tab))
+    print(string.format('OLD: Augmented into %d samples', #self.oldValDataTab))
+
+    self.newAugTrainParamTab = {}
+    self.newTrainDataTab = {}
+    for i=1, #new_train_data_tab do
+        for deg = -1*0, 0 do
+            for vflip = 0, self.vflip do
+                for hflip = 0, self.hflip do
+                    table.insert(self.newTrainDataTab, new_train_data_tab[i])
+                    table.insert(self.newAugTrainParamTab, {degree=deg, vflip=vflip, hflip=hflip})
+                end
+            end
+        end
+    end
+
+    self.newAugValParamTab = {}
+    self.newValDataTab = {}
+    for i=1, #new_val_data_tab do
+        for deg = -1*0, 0 do
+            for vflip = 0, 0 do
+                for hflip = 0, 0 do
+                    table.insert(self.newValDataTab, new_val_data_tab[i])
+                    table.insert(self.newAugValParamTab, {degree=deg, vflip=vflip, hflip=hflip})
+                end
+            end
+        end
+    end
+
+    print(string.format('NEW: Generate %d train Samples', #new_train_data_tab))
+    print(string.format('NEW: Augmented into %d samples', #self.newTrainDataTab))
+    print(string.format('NEW: Generate %d val Samples' , #new_val_data_tab))
+    print(string.format('NEW: Augmented into %d samples', #self.newValDataTab))
 
     -- dataloader
-    self.trainBatches = math.floor(#self.trainDataTab / self.trainBatchSize)
+    local minTrainDataSamples = #self.newTrainDataTab * 2
+    local minValDataSamples = #self.newValDataTab * 2
+    self.trainBatches = math.floor(minTrainDataSamples / self.trainBatchSize)
     self.trainSamples = self.trainBatches * self.trainBatchSize
-    self.valBatches = math.floor(#self.valDataTab / self.valBatchSize)
+    self.valBatches = math.floor(minValDataSamples / self.valBatchSize)
     self.valSamples = self.valBatches * self.valBatchSize
     self.testBatches = math.floor(#self.testDataTab / self.testBatchSize)
     self.testSamples = self.testBatches * self.testBatchSize
     print('Train Sample number: ' .. self.trainSamples)
     print('Val Sample number: ' .. self.valSamples)
     print('Test Sample number: ' .. self.testSamples)
-    print('==================================================================')
+    print('================================================================')
     self.pool = Threads(
         opt.nThreads,
         function(thread_id)
-                require('torch')
-                require('image')
-                require('data_utils_new')
+            require('torch')
+            require('image')
+            require('data_utils_new')
         end,
         function(thread_id)
-                torch.setdefaulttensortype('torch.FloatTensor')
+            torch.setdefaulttensortype('torch.FloatTensor')
         end
     )
 
---    self.mean = torch.Tensor({123, 117, 104}) -- NOTE: RGB style
     self.inputWidth = opt.inputWidth or 720
     self.inputHeight = opt.inputHeight or 576
     self.toolJointNames = opt.toolJointNames
@@ -114,6 +140,7 @@ function DataLoader:__init(opt)
     print(string.format('Det Model radius = %f', self.detJointRadius))
     print(string.format('Regression Model radius = %f', self.jointRadius))
     print(string.format('Regression normalize scale = %f', self.normalScale))
+
 end
 
 function DataLoader:trainSize()
@@ -130,24 +157,49 @@ function DataLoader:testSize()
 end
 
 function DataLoader:load(job_type)
-    local batch_size, nSamples, data_tab, aug_param_tab
+    local batch_size, nSamples, old_data_tab, new_data_tab, data_tab, old_aug_param_tab, new_aug_param_tab, aug_param_tab
     if job_type == 1 then
         batch_size = self.trainBatchSize
-        data_tab = self.trainDataTab
+        old_data_tab = self.oldTrainDataTab
+        new_data_tab = self.newTrainDataTab
         nSamples = self.trainSamples
-        aug_param_tab = self.augTrainParamTab
+        old_aug_param_tab = self.oldAugTrainParamTab
+        new_aug_param_tab = self.newAugTrainParamTab
     elseif job_type == 2 then
         batch_size = self.valBatchSize
-        data_tab = self.valDataTab
+        old_data_tab = self.oldValDataTab
+        new_data_tab = self.newValDataTab
         nSamples = self.valSamples
-        aug_param_tab = self.augValParamTab
+        old_aug_param_tab = self.oldAugValParamTab
+        new_aug_param_tab = self.newAugValParamTab
     else
         batch_size = self.testBatchSize
-        data_tab = self.testDataTab
-        nSamples = self.testBatchSize
-        aug_param_tab = nil
+        old_data_tab = self.testDataTab
+        new_data_tab = self.testDataTab
+        nSamples = self.testBatchSize * 2
+        old_aug_param_tab = nil
+        new_aug_param_tab = nil
     end
-    local perm = torch.randperm(#data_tab)
+    data_tab = {old_data_tab, new_data_tab}
+    aug_param_tab = {old_aug_param_tab, new_aug_param_tab}
+
+    local new_perm = torch.randperm(#new_data_tab)
+    local old_pm = torch.randperm(#old_data_tab)
+    local old_perm = torch.IntTensor(#new_data_tab)
+    for r=1, old_perm:size(1) do
+        local idx = r % #old_data_tab
+        if idx == 0 then idx = #old_data_tab end
+        old_perm[r] = old_pm[idx]
+    end
+
+    local perm = torch.IntTensor(nSamples, 2)
+    for i=1, nSamples/2 do
+        perm[i*2-1][1] = 1 -- old
+        perm[i*2-1][2] = old_perm[i]
+        perm[i*2][1] = 2 -- new
+        perm[i*2][2] = new_perm[i]
+    end
+
     local pool = self.pool
     local input_width = self.inputWidth
     local input_height = self.inputHeight
@@ -179,7 +231,9 @@ function DataLoader:load(job_type)
                 if job_type ~= 1 and job_type ~= 2 then
                     frame_batch_map = nil
                     for i=1, batch_size do
-                        local frame_data = data_tab[indices[i]]
+                        local data_type = indices[i][1]
+                        local data_idx = indices[i][2]
+                        local frame_data = data_tab[data_type][data_idx]
                         local frame = image.load(frame_data.filename, 3, 'byte')
                         frame = image.scale(frame, input_width, input_height)
                         table.insert(frame_tab, frame)
@@ -189,8 +243,10 @@ function DataLoader:load(job_type)
                                                         torch.floor(input_height/model_output_scale),
                                                         torch.floor(input_width/model_output_scale))
                     for i=1, batch_size do
-                        local frame_data = data_tab[indices[i]]
-                        local aug_param = aug_param_tab[indices[i]]
+                        local data_type = indices[i][1]
+                        local data_idx = indices[i][2]
+                        local frame_data = data_tab[data_type][data_idx]
+                        local aug_param = aug_param_tab[data_type][data_idx]
                         local frame = image.load(frame_data.filename, 3, 'byte')
                         frame = image.scale(frame, input_width, input_height)
                         -- augment data
@@ -207,9 +263,10 @@ function DataLoader:load(job_type)
 
 --                        local joint_norm_pos = getJointPos(aug_annos, jointNames, frame_data.toolNum)
 --                        joint_batch_pos[i] = joint_norm_pos:clone()
-                        table.insert(joint_batch_anno, aug_annos)
+                        table.insert(joint_batch_anno, {class=data_type, anno=aug_annos})
                     end
                 end
+
                 -- preprocess images
                 local frame_batch = preProcess(frame_tab, input_width, input_height)
                 collectgarbage()

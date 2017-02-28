@@ -1,42 +1,33 @@
+-- the input of the regression network are perfect output of the detection network
+
 local Threads = require 'threads'
 Threads.serialization('threads.sharedserialize')
-torch.setdefaulttensortype('torch.FloatTensor')
-
 require 'data_utils_new'
+torch.setdefaulttensortype('torch.FloatTensor')
 
 local M = {}
 local DataLoader = torch.class('DataLoader', M)
 
 function DataLoader:__init(opt)
     self.opt = opt
+    self.trainStyle = opt.trainStyle
     self.trainBatchSize = opt.trainBatchSize or opt.batchSize or 1
     self.valBatchSize = opt.valBatchSize or opt.batchSize or 1
     self.testBatchSize = opt.testBatchSize or opt.batchSize or 1
-
     -- get data
     local train_data_tab, val_data_tab, test_data_tab
---    local train_data_file = paths.concat(opt.dataDir, 'train_endo_toolpos_head.t7')
-    local train_data_file = paths.concat(opt.dataDir, 'train_random_toolpos_head.t7')  -- random
+    local train_data_file = paths.concat(opt.dataDir, 'train_endo_toolpos_head.t7')
     if paths.filep(train_data_file) then
         train_data_tab = torch.load(train_data_file)
     else
         error('no such file: ' .. train_data_file)
     end
---    local val_data_file = paths.concat(opt.dataDir, 'val_endo_toolpos_head.t7')
-    local val_data_file = paths.concat(opt.dataDir, 'val_random_toolpos_head.t7')  -- random
+    local val_data_file = paths.concat(opt.dataDir, 'val_endo_toolpos_head.t7')
     if paths.filep(val_data_file) then
         val_data_tab = torch.load(val_data_file)
     else
         error('no such file: ' .. val_data_file)
     end
-
-    -- train with the whole training dataset
-    if opt.trainStyle ~= nil then
-        for i=1, #val_data_tab do table.insert(train_data_tab, val_data_tab[i]) end
-        val_data_tab = nil
-        val_data_tab = train_data_tab
-    end
-
     local test_data_file = paths.concat(opt.dataDir, 'test_endo_frames.t7')
     if paths.filep(test_data_file) then
         test_data_tab = torch.load(test_data_file)
@@ -110,7 +101,12 @@ function DataLoader:__init(opt)
     self.toolJointNames = opt.toolJointNames
     self.toolCompoNames = opt.toolCompoNames
     self.jointRadius = opt.jointRadius or 20
+    self.detJointRadius = opt.detJointRadius or 10
     self.modelOutputScale = opt.modelOutputScale or 4
+    self.normalScale = opt.normalScale or 1
+    print(string.format('Det Model radius = %f', self.detJointRadius))
+    print(string.format('Regression Model radius = %f', self.jointRadius))
+    print(string.format('Regression normalize scale = %f', self.normalScale))
 end
 
 function DataLoader:trainSize()
@@ -141,7 +137,6 @@ function DataLoader:load(job_type)
     else
         batch_size = self.testBatchSize
         data_tab = self.testDataTab
---        nSamples = self.testSamples
         nSamples = self.testBatchSize
         aug_param_tab = nil
     end
@@ -157,70 +152,88 @@ function DataLoader:load(job_type)
     local compoNames = self.toolCompoNames
 
     local j_radius = self.jointRadius
+    local det_j_radius = self.detJointRadius
     local model_output_scale = self.modelOutputScale
+    local normal_scale = self.normalScale
+
+    local train_style = self.trainStyle
 
     local job_done = 0
     local idx = 1
-    local frame_batch_CPU, frame_batch_map_CPU, frame_batch_anno_CPU
+    local frame_batch_CPU, frame_batch_det_map_CPU, frame_batch_map_CPU, frame_batch_anno_CPU
     local function enqueue()
         while idx <= nSamples and pool:acceptsjob() do
             local _indices = perm:narrow(1, idx, batch_size)
             idx = idx + batch_size
             pool:addjob(
-                function(indices)
-                    -- load data
-                    local frame_batch_map
-                    local joint_batch_anno = {}
-                    local frame_tab = {}
-                    if job_type ~= 1 and job_type ~= 2 then
-                        print(indices)
-                        frame_batch_map = nil
-                        for i=1, batch_size do
-                            local frame_data = data_tab[indices[i]]
-                            local frame = image.load(frame_data.filename, 3, 'byte')
-                            frame = image.scale(frame, input_width, input_height)
-                            table.insert(frame_tab, frame)
-                        end
-                    else
-                        frame_batch_map = torch.FloatTensor(batch_size, jointNum+compoNum,
-                                                                   torch.floor(input_height/model_output_scale),
-                                                                   torch.floor(input_width/model_output_scale))
-                        for i=1, batch_size do
-                            local frame_data = data_tab[indices[i]]
-                            local aug_param = aug_param_tab[indices[i]]
-                            local frame = image.load(frame_data.filename, 3, 'byte')
-                            frame = image.scale(frame, input_width, input_height)
+            function(indices)
+                -- load data
+                local frame_batch_map, frame_batch_det_map
+                local joint_batch_anno = {}
+                local frame_tab = {}
+                if job_type ~= 1 and job_type ~= 2 then
+                    frame_batch_map = nil
+                    frame_batch_det_map = nil
 
-                            -- augment data
-                            local aug_frame, aug_annos
-                            aug_frame, aug_annos = flipToolPosData(frame, aug_param.hflip, aug_param.vflip, frame_data.annotations)
---                            aug_frame, aug_annos = rotateToolPos(aug_frame, aug_param.degree, aug_annos)
-                            table.insert(frame_tab, aug_frame)
-                            -- joint map generation
-                            -- note: joint map size is based on the model output: scale down 4 times
-    --                        local heatmap = genSepHeatMap(aug_annos, jointNames, j_radius, aug_frame, model_output_scale)
-                            local jointmap = genSepJointMap(aug_annos, jointNames, j_radius, aug_frame, model_output_scale)
-                            frame_batch_map[{i, {1, jointNum}}] = jointmap:clone()
-    --                        local compmap = genSepPAFMap(aug_annos, compoNames, j_radius, aug_frame, model_output_scale)
-                            local compmap = genSepPAFMapDet(aug_annos, compoNames, j_radius, aug_frame, model_output_scale)
-                            frame_batch_map[{i, {jointNum+1, -1}}] = compmap:clone()
-                            table.insert(joint_batch_anno, aug_annos)
-                        end
+                    for i=1, batch_size do
+                        local frame_data = data_tab[indices[i]]
+                        local frame = image.load(frame_data.filename, 3, 'byte')
+                        frame = image.scale(frame, input_width, input_height)
+                        table.insert(frame_tab, frame)
                     end
+                else
+                    if train_style == nil then
+                        frame_batch_det_map = torch.FloatTensor(batch_size, jointNum+compoNum,
+                                                                torch.floor(input_height/model_output_scale),
+                                                                torch.floor(input_width/model_output_scale))
+                    end
+                    frame_batch_map = torch.FloatTensor(batch_size, jointNum+compoNum,
+                                                        torch.floor(input_height/model_output_scale),
+                                                        torch.floor(input_width/model_output_scale))
+                    for i=1, batch_size do
+                        local frame_data = data_tab[indices[i]]
+                        local aug_param = aug_param_tab[indices[i]]
+                        local frame = image.load(frame_data.filename, 3, 'byte')
+                        frame = image.scale(frame, input_width, input_height)
+                        -- augment data
+                        local aug_frame, aug_annos
+                        aug_frame, aug_annos = flipToolPosData(frame,  aug_param.hflip, aug_param.vflip, frame_data.annotations)
+--                        aug_frame, aug_annos = rotateToolPos(aug_frame, aug_param.degree, aug_annos)
+                        table.insert(frame_tab, aug_frame)
+                        -- note: joint map size is based on the model output: scale down 1 or 4 times
 
-                    -- preprocess images
-                    local frame_batch = preProcess(frame_tab, input_width, input_height)
-                    collectgarbage()
-                    collectgarbage()
-                    return frame_batch, frame_batch_map, joint_batch_anno
-                end,
-                function(frame_batch, frame_batch_map, joint_batch_anno)
-                    frame_batch_CPU = frame_batch
-                    frame_batch_map_CPU = frame_batch_map
-                    frame_batch_anno_CPU = joint_batch_anno
-                    job_done = job_done + batch_size
-                end,
-                _indices
+                        if train_style == nil then
+                            local jointdetmap = genSepJointMap(aug_annos, jointNames, det_j_radius, aug_frame, model_output_scale)
+                            frame_batch_det_map[{i, {1, jointNum}}] = jointdetmap:clone()
+                            local compodetmap = genSepPAFMapDet(aug_annos, compoNames, det_j_radius, aug_frame, model_output_scale)
+                            frame_batch_det_map[{i, {jointNum+1, -1}}] = compodetmap:clone()
+                        end
+
+                        local heatmap = genSepHeatMap(aug_annos, jointNames, j_radius, det_j_radius, aug_frame, model_output_scale, normal_scale)
+                        frame_batch_map[{i, {1, jointNum}}] = heatmap:clone()
+                        -- todo: paf heatmap generation
+                        local compmap = genSepPAFMapReg(aug_annos, compoNames, j_radius, det_j_radius, aug_frame, model_output_scale, normal_scale)
+                        frame_batch_map[{i, {jointNum+1, -1}}] = compmap:clone()
+
+--                        local joint_norm_pos = getJointPos(aug_annos, jointNames, frame_data.toolNum)
+--                        joint_batch_pos[i] = joint_norm_pos:clone()
+                        table.insert(joint_batch_anno, aug_annos)
+                    end
+                end
+                -- preprocess images
+                local frame_batch = preProcess(frame_tab, input_width, input_height)
+                collectgarbage()
+                collectgarbage()
+                return frame_batch, frame_batch_det_map, frame_batch_map, joint_batch_anno
+            end,
+            function(frame_batch, frame_batch_det_map, frame_batch_map, joint_batch_anno)
+                frame_batch_CPU = frame_batch
+                frame_batch_det_map_CPU = frame_batch_det_map
+                frame_batch_map_CPU = frame_batch_map
+                frame_batch_anno_CPU = joint_batch_anno
+                job_done = job_done + batch_size
+            end,
+            _indices
             )
         end
     end
@@ -234,9 +247,8 @@ function DataLoader:load(job_type)
             pool:synchronize()
         end
         enqueue()
-        return job_done, frame_batch_CPU, frame_batch_map_CPU, frame_batch_anno_CPU
+        return job_done, frame_batch_CPU,  frame_batch_det_map_CPU, frame_batch_map_CPU, frame_batch_anno_CPU
     end
-
     return loop
 end
 

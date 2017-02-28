@@ -1,7 +1,8 @@
+-- the input of the regression network are perfect output of the detection network
 require 'cunn'
 require 'cudnn'
 require 'cutorch'
-local Runner = require 'runner_regressor'
+local Runner = require 'runner_regressor_perfectinput'
 
 torch.setdefaulttensortype('torch.FloatTensor')
 
@@ -68,6 +69,7 @@ end
 local opt = {
 	dataDir = dataDir,
 	saveDir = saveDir,
+	trainStyle = nil,  -- nil or 'traditional'
 	retrain = 'last', -- nil, 'last' or 'best'
 	learningRate = 1e-3,  -- old 1e-5
 	momentum = 0.98,
@@ -84,19 +86,20 @@ local opt = {
 --	detModelConf = {type='toolPartDetFull', v='256*320_ftblr_head', jointRadius=10, modelOutputScale=1, inputWidth=320, inputHeight=256},
 --	modelConf = {type='toolPoseRegressFull', v='256*320_ftblr_head', jointRadius=10, modelOutputScale=1, inputWidth=320, inputHeight=256, normalScale=10, vflip=1, hflip=1},
 
-	-- larger radius for detection model (MICCAI)
+	-- larger radius for detection model
 --	detModelConf = {type='toolPartDetFull', v='256*320_ftblr_head', jointRadius=15, modelOutputScale=1, inputWidth=320, inputHeight=256},
---	modelConf = {type='toolPoseRegressFull', v='256*320_ftblr_head_noConcat', jointRadius=20, modelOutputScale=1, inputWidth=320, inputHeight=256, normalScale=10, vflip=1, hflip=1},
+--	modelConf = {type='toolPoseRegressFull', v='256*320_ftblr_head_noConcat_perfectinput', jointRadius=20, modelOutputScale=1, inputWidth=320, inputHeight=256, normalScale=10, vflip=1, hflip=1},
 
-	detModelConf = {type='toolPartDetFull', v='256*320_ftblr_random_head', jointRadius=15, modelOutputScale=1, inputWidth=320, inputHeight=256},
-	modelConf = {type='toolPoseRegressFull', v='256*320_ftblr_random_head_noConcat', jointRadius=20, modelOutputScale=1, inputWidth=320, inputHeight=256, normalScale=10, vflip=1, hflip=1},
+	-- no flip
+	detModelConf = {type='toolPartDetFull', v='256*320_head', jointRadius=15, modelOutputScale=1, inputWidth=320, inputHeight=256},
+	modelConf = {type='toolPoseRegressFull', v='256*320_head_noConcat_perfectinput', jointRadius=20, modelOutputScale=1, inputWidth=320, inputHeight=256, normalScale=10, vflip=0, hflip=0},
 
 
 	gpus = {1},
 	nThreads = 6,
 --	batchSize = 1,
-	trainBatchSize = 2,
-	valBatchSize = 2,
+	trainBatchSize = 3,
+	valBatchSize = 3,
 	rotMaxDegree = 0,
     toolJointNames = {'LeftClasperPoint', 'RightClasperPoint',
                           'HeadPoint', 'ShaftPoint', 'EndPoint' }, -- joint number = 5
@@ -190,7 +193,7 @@ end
 local detModel_path = getDetModelPath()
 local model_path = getModelPath()
 local model
-local runningState = {valAcc=0, valPrec=1e+8, model = getModel(), optimState = getOptimState() }
+local runningState = {valAcc=0, model = getModel(), optimState = getOptimState() }
 
 -- The runner handles the training loop and evaluate on the val set
 local runner = Runner(detModel_path, model_path, opt, runningState.optimState)
@@ -202,6 +205,7 @@ local logFile = io.open(logPath, 'w')
 local logger = torch.FloatTensor(opt.nEpoches, 5)
 
 -- Run model on validation set
+runner:test(0)
 local valAcc, valLoss, valPrec = runner:val(0)
 print(string.format("Val : robustness accuracy = %.3f, loss = %.5f", valAcc, valLoss))
 print(string.format("Val : precision distance = %.3f", valPrec))
@@ -249,12 +253,10 @@ for epoch = 1, opt.nEpoches do
 	print(string.format("Val : robustness accuracy = %.3f, loss = %.5f", valAcc, valLoss))
 	print(string.format("Val : precision distance = %.3f", valPrec))
 
-	if valPrec < runningState.valPrec then
---	if valAcc > runningState.valAcc then
+	if valAcc > runningState.valAcc then
 		print('Saving the best! ')
 		best_epoch = runningState.optimState.epoch
 		runningState.valAcc = valAcc
-		runningState.valPrec = valPrec
 --		torch.save(bestModelPath, runningState.model)
 		torch.save(bestModelPath, model:clearState())
 		saveOptimState(bestOptimStatePath, runningState.optimState)
@@ -277,4 +279,6 @@ logger = nil
 runningState.model = nil
 runningState.optimState = nil
 model = nil
+
+
 

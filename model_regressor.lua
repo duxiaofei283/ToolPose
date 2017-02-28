@@ -67,15 +67,39 @@ local function tool_regressFull(joint_num, compo_num, first_layer_channels)
 --    local dual2 = Dual(first_layer_channels*2, first_layer_channels*2, first_layer_channels*2, 5, 1, 2)
 --    local dual3 = Dual(first_layer_channels*4, first_layer_channels*4, first_layer_channels*4, 5, 1, 2)
     local dual1 = Dual(input_channels, first_layer_channels, first_layer_channels, 3, 1, 1)
-    local dual11 = Dual(first_layer_channels*2, first_layer_channels, first_layer_channels, 3, 1, 1)
+    local cbr1 = nn.Sequential()
+                    :add(nn.SpatialConvolution(first_layer_channels*2, first_layer_channels*2, 1, 1, 1, 1, 0, 0))
+                    :add(nn.SpatialBatchNormalization(first_layer_channels*2))
+                    :add(nn.ReLU())
     local dual2 = Dual(first_layer_channels*2, first_layer_channels*2, first_layer_channels*2, 3, 1, 1)
-    local dual22 = Dual(first_layer_channels*4, first_layer_channels*2, first_layer_channels*2, 3, 1, 1)
+    local cbr2 = nn.Sequential()
+                    :add(nn.SpatialConvolution(first_layer_channels*4, first_layer_channels*4, 1, 1, 1, 1, 0, 0))
+                    :add(nn.SpatialBatchNormalization(first_layer_channels*4))
+                    :add(nn.ReLU())
     local dual3 = Dual(first_layer_channels*4, first_layer_channels*4, first_layer_channels*4, 3, 1, 1)
+    local cbr3 = nn.Sequential()
+                    :add(nn.SpatialConvolution(first_layer_channels*8, first_layer_channels*8, 1, 1, 1, 1, 0, 0))
+                    :add(nn.SpatialBatchNormalization(first_layer_channels*8))
+                    :add(nn.ReLU())
     local dual4 = Dual(first_layer_channels*8, first_layer_channels*4, first_layer_channels*4, 3, 1, 1)
+    local cbr4 = nn.Sequential()
+                        :add(nn.SpatialConvolution(first_layer_channels*8, first_layer_channels*8, 1, 1, 1, 1, 0, 0))
+                        :add(nn.SpatialBatchNormalization(first_layer_channels*8))
+                        :add(nn.ReLU())
     local dual5 = Dual(first_layer_channels*8, first_layer_channels*4, first_layer_channels*4, 1, 1, 0)
+    local cbr5 = nn.Sequential()
+                        :add(nn.SpatialConvolution(first_layer_channels*8, first_layer_channels*8, 1, 1, 1, 1, 0, 0))
+                        :add(nn.SpatialBatchNormalization(first_layer_channels*8))
+                        :add(nn.ReLU())
     local dual6 = DualNoR(first_layer_channels*8, joint_num, compo_num, 1, 1, 0)
 
-    m:add(dual1):add(dual11):add(dual2):add(dual22):add(dual3):add(dual4):add(dual5):add(dual6)
+
+    m:add(dual1)--:add(cbr1)
+     :add(dual2)--:add(cbr2)
+     :add(dual3)--:add(cbr3)
+     :add(dual4)--:add(cbr4)
+     :add(dual5)--:add(cbr5)
+     :add(dual6)
 
     return m
 end
@@ -121,7 +145,8 @@ print(regress_net)
 --    local outp = regress_net:forward(inp)
 --end
 local saveDir = '/home/xiaofei/workspace/toolPose/models'
-local modelConf = {type='toolPoseRegressFull', v=4}
+--local modelConf = {type='toolPoseRegressFull', v='256*320_ftblr_head_noConcat' }
+local modelConf = {type='toolPoseRegressFull', v='256*320_ftblr_random_head_noConcat'}
 --
 local saveID = modelConf.type .. '_v' .. modelConf.v
 local initModelPath = paths.concat(saveDir, 'model.' .. saveID .. '.init.t7')
@@ -132,4 +157,5 @@ print('saved model ' .. saveID .. ' to ' .. paths.concat(saveDir, initModelPath)
 -- toolPoseRegressFull v=1: inputsize = [384, 480], input frame+detMap(down_sample=1)
 -- toolPoseRegressFull v=2: inputsize = [256, 320], input frame+detMap(down_sample=1)
 -- toolPoseRegressFull v=4: inputsize = [256, 320], input frame+detMap(round)(down_sample=1), without concat
+-- toolPoseRegressFull
 

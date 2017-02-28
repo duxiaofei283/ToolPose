@@ -6,12 +6,12 @@ require 'xlua'
 require 'image'
 local optim = require('optim')
 local matio = require 'matio'
-local DataLoader = require 'dataloader_regressor'
+local DataLoader = require 'dataloader_invivo_det'
 
 torch.setdefaulttensortype('torch.FloatTensor')
 
-local ORIGIN_FRAME_HEIGHT = 576
-local ORIGIN_FRAME_WIDTH = 720
+local ORIGIN_FRAME_HEIGHT = 1080 --576
+local ORIGIN_FRAME_WIDTH = 1920 --720
 
 -- frames       [b,c=3,H,W]
 -- gt_jtmaps    [b,c=1,h,w]
@@ -44,40 +44,22 @@ local function visualResult(frames, gt_maps, outputs_map, joint_names, compo_nam
     end
 end
 
-local function saveMatResult(frames, gt_maps, detect_outputs_map, regress_outputs_map, joint_names, compo_names, saveDir)
-    detect_outputs_map:clamp(0,1)
---    regress_outputs_map:clamp(0,1)
+local function saveMatResult(frames, gt_maps, outputs_map, joint_names, compo_names, saveDir)
+    outputs_map:clamp(0,1)
     local batch_size = frames:size(1)
     local rand_idx = torch.ceil(batch_size * math.random())
     local saved_mat = {}
     saved_mat['frame'] = frames[rand_idx]:float()
---    matio.save(paths.concat(saveDir, 'frame_raw.mat'), {frame=frames[rand_idx]:float()});
-
     local joint_num = #joint_names
     for i=1, joint_num do
---        print(gt_maps[rand_idx][i]:min(), gt_maps[rand_idx][i]:max())
---        print(outputs_map[rand_idx][i]:min(), outputs_map[rand_idx][i]:max())
-        if gt_maps ~= nil then
-            saved_mat[string.format('joint_%s_gt', joint_names[i])] = gt_maps[rand_idx][i]:float()
---            matio.save(paths.concat(saveDir, string.format('frame_%s_gt.mat', joint_names[i])), gt_maps[rand_idx][i]:float());
-        end
-        saved_mat[string.format('conf_%s_result', joint_names[i])] = detect_outputs_map[rand_idx][i]:float()
-        saved_mat[string.format('joint_%s_result', joint_names[i])] = regress_outputs_map[rand_idx][i]:float()
---        matio.save(paths.concat(saveDir, string.format('frame_%s_result.mat', joint_names[i])), outputs_map[rand_idx][i]:float())
+        if gt_maps ~= nil then saved_mat[string.format('conf_%s_gt', joint_names[i])] = gt_maps[rand_idx][i]:float() end
+        saved_mat[string.format('conf_%s_result', joint_names[i])] = outputs_map[rand_idx][i]:float()
     end
 
     local compo_num = #compo_names
     for i=1, compo_num do
---        print(gt_maps[rand_idx][joint_num+i]:min(), gt_maps[rand_idx][joint_num+i]:max())
---        print(outputs_map[rand_idx][joint_num+i]:min(), outputs_map[rand_idx][joint_num+i]:max())
-
-        if gt_maps ~= nil then
-            saved_mat[string.format('compo_%s_%s_gt', compo_names[i][1], compo_names[i][2])] = gt_maps[rand_idx][joint_num+i]:float()
---            matio.save(paths.concat(saveDir, string.format('frame_{%s_%s}_gt.mat', compo_names[i][1], compo_names[i][2])), gt_maps[rand_idx][joint_num+i]:float())
-        end
-        saved_mat[string.format('conf_%s_%s_result', compo_names[i][1], compo_names[i][2])] = detect_outputs_map[rand_idx][joint_num+i]:float()
-        saved_mat[string.format('compo_%s_%s_result', compo_names[i][1], compo_names[i][2])] = regress_outputs_map[rand_idx][joint_num+i]:float()
---        matio.save(paths.concat(saveDir, string.format('frame_{%s_%s}_result.mat', compo_names[i][1], compo_names[i][2])), outputs_map[rand_idx][joint_num+i]:float())
+        if gt_maps ~= nil then saved_mat[string.format('compo_%s_%s_gt', compo_names[i][1], compo_names[i][2])] = gt_maps[rand_idx][joint_num+i]:float() end
+        saved_mat[string.format('compo_%s_%s_result', compo_names[i][1], compo_names[i][2])] = outputs_map[rand_idx][joint_num+i]:float()
     end
     matio.save(paths.concat(saveDir, 'output.mat'), saved_mat)
 end
@@ -106,13 +88,24 @@ local function JointPrecision(gt_joints_anno, outputs_map, joint_names, dist_thr
         table.insert(batch_output_peaks_tab, output_peaks_tab)
     end
 
-    local dist_tab = {}
+    local dist_tab
+    local old_dist_tab = {}
+    local new_dist_tab = {}
     for i=1, #joint_names do
-        table.insert(dist_tab, {})
+        table.insert(old_dist_tab, {})
+        table.insert(new_dist_tab, {})
     end
 
     for bidx=1, batch_size do
-        local frame_anno = gt_joints_anno[bidx]
+        local frame_anno = gt_joints_anno[bidx].anno
+        local frame_class = gt_joints_anno[bidx].class
+
+        if frame_class == 1 then
+            dist_tab = old_dist_tab
+        elseif frame_class == 2 then
+            dist_tab = new_dist_tab
+        end
+
         for i=1, #joint_names do
             local joint_anno = frame_anno[joint_names[i]]
             if joint_anno ~= nil then
@@ -152,15 +145,27 @@ local function JointPrecision(gt_joints_anno, outputs_map, joint_names, dist_thr
     end
 
     -- average dist
-    local avg_dist_tab = {}
-    for i=1, #dist_tab do
+    local old_avg_dist_tab = {}
+    for i=1, #old_dist_tab do
         local avg_dist = 0.0
-        local joint_disttab = dist_tab[i]
+        local joint_disttab = old_dist_tab[i]
         for j=1, #joint_disttab do
             avg_dist = avg_dist + joint_disttab[j]
         end
         if #joint_disttab ~= 0 then avg_dist = avg_dist / #joint_disttab end
-        table.insert(avg_dist_tab, avg_dist)
+        table.insert(old_avg_dist_tab, avg_dist)
+--        print(string.format('%s average precision dist = %.2f',joint_names[i], avg_dist))
+    end
+
+    local new_avg_dist_tab = {}
+    for i=1, #new_dist_tab do
+        local avg_dist = 0.0
+        local joint_disttab = new_dist_tab[i]
+        for j=1, #joint_disttab do
+            avg_dist = avg_dist + joint_disttab[j]
+        end
+        if #joint_disttab ~= 0 then avg_dist = avg_dist / #joint_disttab end
+        table.insert(new_avg_dist_tab, avg_dist)
 --        print(string.format('%s average precision dist = %.2f',joint_names[i], avg_dist))
     end
 
@@ -170,18 +175,14 @@ local function JointPrecision(gt_joints_anno, outputs_map, joint_names, dist_thr
 --    end
 --    avgdist = avgdist / #avg_dist_tab
 --    return avg_dist_tab
-    return avg_dist_tab
+    return old_avg_dist_tab, new_avg_dist_tab
 end
 
 local M = {}
 local Runner = torch.class('Runner', M)
-function Runner:__init(det_model_path, net_path, opt, optimState)
+function Runner:__init(net_path, opt, optimState)
     -- load network
     print('Loading network ...')
-    self.detModel = torch.load(det_model_path)
---    print(self.detModel)
-    self.detModel:cuda()
-    self.detModel:evaluate()
     self.model = torch.load(net_path)
 --    print(self.model)
     self.model:cuda()
@@ -194,12 +195,12 @@ function Runner:__init(det_model_path, net_path, opt, optimState)
     self.batchSize = opt.batchSize or 1
     self.toolJointNames = opt.toolJointNames
     self.toolCompoNames = opt.toolCompoNames
+
     self.toolJointNum = #self.toolJointNames
     self.toolCompoNum = #self.toolCompoNames
 
-    self.jointRadius = opt.jointRadius or 20
-    self.detJointRadius = opt.detJointRadius or 10
-    self.normalScale = opt.normalScale
+    self.jointRadius = opt.jointRadius or 10
+
 
     self.nGPU = #opt.gpus
     local nGPU = #opt.gpus
@@ -221,34 +222,29 @@ function Runner:__init(det_model_path, net_path, opt, optimState)
     self.inputWidth = opt.inputWidth
     self.inputHeight = opt.inputHeight
 
---    self.framesGPU = nil
+    self.framesGPU = nil
     self.mapsGPU = nil
     if nGPU > 1 then
---        self.framesGPU = cutorch.createCudaHostTensor(self.batchSize, 3, self.inputHeight, self.inputWidth)
---        self.mapsGPU = cutorch.createCudaHostTensor(self.batchSize, self.toolJointNum+2*self.toolCompoNum, self.inputHeight, self.inputWidth)
+        self.framesGPU = cutorch.createCudaHostTensor(self.batchSize, 3, self.inputHeight, self.inputWidth)
+        self.mapsGPU = cutorch.createCudaHostTensor(self.batchSize, self.toolJointNum+2*self.toolCompoNum, self.inputHeight, self.inputWidth)
     else
 --        self.framesGPU = torch.CudaTensor(self.batchSize, 3, self.inputHeight, self.inputWidth)
 --        self.mapsGPU = torch.CudaTensor(self.batchSize, 1, self.inputHeight, self.inputWidth)
---        self.framesGPU = torch.CudaTensor()
+        self.framesGPU = torch.CudaTensor()
         self.mapsGPU = torch.CudaTensor()
-        self.inputsGPU = torch.CudaTensor()
     end
 
     self.params, self.gradParams = self.model:getParameters()
     print('model #params = ' .. tostring(#self.params))
 
-    self.criterion = nn.MSECriterion()
+    self.criterion = nn.BCECriterion()
+--    self.criterion = nn.MSECriterion()
 --    self.criterion.sizeAverage = false
     self.criterion:cuda()
-
 end
 
 function Runner:getModel()
     return self.model
-end
-
-function Runner:getDetModel()
-    return self.detModel
 end
 
 function Runner:train(epoch)
@@ -258,9 +254,13 @@ function Runner:train(epoch)
     local size = self.dataLoader:trainSize()
     local loss = 0.0
     local acc = 0.0
-    local prec_tab = {}
+    local old_acc = 0.0
+    local new_acc = 0.0
+    local old_prec_tab = {}
+    local new_prec_tab = {}
     for i=1, #self.toolJointNames do
-        table.insert(prec_tab, 0.0)
+        table.insert(old_prec_tab, 0.0)
+        table.insert(new_prec_tab, 0.0)
     end
     local N = 0
 
@@ -269,55 +269,61 @@ function Runner:train(epoch)
     local function feval()
         return self.criterion.output, self.gradParams
     end
+
     for n, framesCPU, mapsCPU, jointAnnoTab in self.dataLoader:load(1) do
         -- load data
         dataTime = dataTime + dataTimer:time().real
         -- transfer over to GPU
---        self.framesGPU:resize(framesCPU:size()):copy(framesCPU)
+        self.framesGPU:resize(framesCPU:size()):copy(framesCPU)
         self.mapsGPU:resize(mapsCPU:size()):copy(mapsCPU)
-
-        -- todo: deal with then outputscale ~= 1
-        self.inputsGPU:resize(framesCPU:size(1), framesCPU:size(2)+mapsCPU:size(2), framesCPU:size(3), framesCPU:size(4))
-        self.inputsGPU[{{},{1,3}}]:copy(framesCPU)
 
         -- reset gradparameters
         self.gradParams:zero()
         -- forward
---        local jointsGPU = self.detModel:forward(self.framesGPU)
-
---        self.inputsGPU[{{},{4,-1}}] = self.detModel:forward(self.inputsGPU[{{},{1,3}}])
-
-        -- test
-        self.inputsGPU[{{},{4,-1}}] = self.detModel:forward(self.inputsGPU[{{},{1,3}}])
-
-        local outputsGPU = self.model:forward(self.inputsGPU)
+--        print(self.framesGPU:size())
+--        print(self.mapsGPU:size())
+        local outputsGPU = self.model:forward(self.framesGPU)
         local loss_batch = self.criterion:forward(outputsGPU, self.mapsGPU)
 
         loss = loss + loss_batch
         -- backward
         local grad_output = self.criterion:backward(outputsGPU, self.mapsGPU)
-        self.model:backward(self.inputsGPU, grad_output)
+        self.model:backward(self.framesGPU, grad_output)
         -- update parameters
         optim.sgd(feval, self.params, self.optimState)
         -- todo: accumulate accuracy
-        local batch_acc = torch.eq(torch.round(outputsGPU/self.normalScale), torch.round(self.mapsGPU/self.normalScale)):sum() / self.mapsGPU:nElement()
+        local old_batch_prec, new_batch_prec = {}, {}
+        for i=1, #self.toolJointNames do table.insert(old_batch_prec, -1) table.insert(new_batch_prec, -1) end
+        old_batch_prec, new_batch_prec = JointPrecision(jointAnnoTab, outputsGPU, self.toolJointNames, self.jointRadius)
+        for i=1, #self.toolJointNames do
+            old_prec_tab[i] = old_batch_prec[i] + old_batch_prec[i]
+            new_prec_tab[i] = new_prec_tab[i] + new_batch_prec[i]
+        end
+        local batch_acc = torch.eq(torch.round(outputsGPU), torch.round(self.mapsGPU)):sum() / self.mapsGPU:nElement()
         acc = acc + batch_acc
 
-        -- accumulate precision
-        local batch_prec = {}
-        for i=1, #self.toolJointNames do table.insert(batch_prec, -1) end
-        batch_prec = JointPrecision(jointAnnoTab, outputsGPU, self.toolJointNames, self.detJointRadius)
-        for i=1, #self.toolJointNames do
-            prec_tab[i] = prec_tab[i] + batch_prec[i]
+        -- acc for old or new data
+        local old_batch_acc, new_batch_acc = 0.0, 0.0
+        local old_num, new_num = 0, 0
+        for idx = 1, #jointAnnoTab do
+            if jointAnnoTab[idx].class == 1 then -- old
+                old_batch_acc = old_batch_acc + torch.eq(torch.round(outputsGPU[idx]), torch.round(self.mapsGPU[idx])):sum() / self.mapsGPU[idx]:nElement()
+                old_num = old_num + 1
+            else
+                new_batch_acc = new_batch_acc + torch.eq(torch.round(outputsGPU[idx]), torch.round(self.mapsGPU[idx])):sum() / self.mapsGPU[idx]:nElement()
+                new_num = new_num + 1
+            end
         end
+        old_acc = old_acc + old_batch_acc/old_num
+        new_acc = new_acc + new_batch_acc/new_num
+
         N = N + 1
 
         -- visualize result for debugging
         if n == framesCPU:size(1) then
---            print(self.inputsGPU:max())
             print(mapsCPU:max())
             print(outputsGPU:max())
-            saveMatResult(framesCPU, mapsCPU, self.inputsGPU[{{},{4,-1}}], outputsGPU, self.toolJointNames, self.toolCompoNames,'/home/xiaofei/workspace/toolPose/regress_results/train')
+            saveMatResult(framesCPU, mapsCPU, outputsGPU, self.toolJointNames, self.toolCompoNames,'/home/xiaofei/workspace/toolPose/finetune_det_results/train')
         end
 
         -- check that the storage didn't get changed due to an unfortunate getParameters call
@@ -336,18 +342,29 @@ function Runner:train(epoch)
     -- calculate loss, acc
     loss = loss / N
     acc = acc * 100 / N
+    old_acc = old_acc * 100 / N
+    new_acc = new_acc * 100 / N
 
-    local prec = 0.0 -- average joint prec
+    local old_prec = 0.0    -- average joint prec
     for i=1, #self.toolJointNames do
-        prec_tab[i] = prec_tab[i] / N
-        print(string.format('%s average precision dist = %.2f',self.toolJointNames[i], prec_tab[i]))
-        prec = prec + prec_tab[i]
+        old_prec_tab[i] = old_prec_tab[i] / N
+--        print(string.format('OLD %s average precision dist = %.2f',self.toolJointNames[i], old_prec_tab[i]))
+        old_prec = old_prec + old_prec_tab[i]
     end
-    prec = prec / #self.toolJointNames
+    old_prec = old_prec / #self.toolJointNames
 
+    local new_prec = 0.0 -- average joint prec
+    for i=1, #self.toolJointNames do
+        new_prec_tab[i] = new_prec_tab[i] / N
+--        print(string.format('NEW %s average precision dist = %.2f',self.toolJointNames[i], new_prec_tab[i]))
+        new_prec = new_prec + new_prec_tab[i]
+    end
+    new_prec = new_prec / #self.toolJointNames
+
+--    acc = 1 / (loss + 1e-5)
     print("\nTrain : time to learn = " .. timer:time().real .. ' sec')
 	print("Train : time to load data = " .. dataTime .. ' sec')
-    return acc, loss, prec
+    return acc, loss, old_acc, new_acc
 end
 
 function Runner:val(epoch)
@@ -357,57 +374,64 @@ function Runner:val(epoch)
     local size = self.dataLoader:valSize()
     local loss = 0.0
     local acc = 0.0
-    local prec_tab = {}
+    local old_acc = 0.0
+    local new_acc = 0.0
+    local old_prec_tab = {}
+    local new_prec_tab = {}
     for i=1, #self.toolJointNames do
-        table.insert(prec_tab, 0.0)
+        table.insert(old_prec_tab, 0.0)
+        table.insert(new_prec_tab, 0.0)
     end
     local N = 0
 
     self.model:evaluate()
 
-
     for n, framesCPU, mapsCPU, jointAnnoTab in self.dataLoader:load(2) do
         -- load data
         dataTime = dataTime + dataTimer:time().real
         -- transfer over to GPU
---        self.framesGPU:resize(framesCPU:size()):copy(framesCPU)
+        self.framesGPU:resize(framesCPU:size()):copy(framesCPU)
         self.mapsGPU:resize(mapsCPU:size()):copy(mapsCPU)
 
-        -- todo: deal with then outputscale ~= 1
-        self.inputsGPU:resize(framesCPU:size(1), framesCPU:size(2)+mapsCPU:size(2), framesCPU:size(3), framesCPU:size(4))
-        self.inputsGPU[{{},{1,3}}]:copy(framesCPU)
-
         -- forward
---        local jointsGPU = self.detModel:forward(self.framesGPU)
-
---        self.inputsGPU[{{},{4,-1}}] = self.detModel:forward(self.inputsGPU[{{},{1,3}}])
-
-        -- test
-        self.inputsGPU[{{},{4,-1}}] = self.detModel:forward(self.inputsGPU[{{},{1,3}}])
-
-        local outputsGPU = self.model:forward(self.inputsGPU)
+--        print(self.framesGPU:size())
+--        print(self.mapsGPU:size())
+        local outputsGPU = self.model:forward(self.framesGPU)
         local loss_batch = self.criterion:forward(outputsGPU, self.mapsGPU)
         loss = loss + loss_batch
         -- todo: accumulate accuracy
-        local batch_acc = torch.eq(torch.round(outputsGPU/self.normalScale), torch.round(self.mapsGPU/self.normalScale)):sum() / self.mapsGPU:nElement()
+        local old_batch_prec, new_batch_prec = {}, {}
+        for i=1, #self.toolJointNames do table.insert(old_batch_prec, -1) table.insert(new_prec_tab, -1) end
+        old_batch_prec, new_batch_prec = JointPrecision(jointAnnoTab, outputsGPU, self.toolJointNames, self.jointRadius)
+        for i=1, #self.toolJointNames do
+            old_prec_tab[i] = old_prec_tab[i] + old_batch_prec[i]
+            new_prec_tab[i] = new_prec_tab[i] + new_batch_prec[i]
+        end
+        local batch_acc = torch.eq(torch.round(outputsGPU), torch.round(self.mapsGPU)):sum() / self.mapsGPU:nElement()
         acc = acc + batch_acc
 
-        -- accumulate precision
-        local batch_prec = {}
-        for i=1, #self.toolJointNames do table.insert(batch_prec, -1) end
-        batch_prec = JointPrecision(jointAnnoTab, outputsGPU, self.toolJointNames, self.detJointRadius)
-        for i=1, #self.toolJointNames do
-            prec_tab[i] = prec_tab[i] + batch_prec[i]
+        -- acc for old or new data
+        local old_batch_acc, new_batch_acc = 0.0, 0.0
+        local old_num, new_num = 0, 0
+        for idx = 1, #jointAnnoTab do
+            if jointAnnoTab[idx].class == 1 then -- old
+                old_batch_acc = old_batch_acc + torch.eq(torch.round(outputsGPU[idx]), torch.round(self.mapsGPU[idx])):sum() / self.mapsGPU[idx]:nElement()
+                old_num = old_num + 1
+            else
+                new_batch_acc = new_batch_acc + torch.eq(torch.round(outputsGPU[idx]), torch.round(self.mapsGPU[idx])):sum() / self.mapsGPU[idx]:nElement()
+                new_num = new_num + 1
+            end
         end
+        old_acc = old_acc + old_batch_acc/old_num
+        new_acc = new_acc + new_batch_acc/new_num
 
         N = N + 1
-
 
         -- visualize result for debugging
         if n == framesCPU:size(1) then
             print(mapsCPU:max())
             print(outputsGPU:max())
-            saveMatResult(framesCPU, mapsCPU, self.inputsGPU[{{},{4,-1}}], outputsGPU, self.toolJointNames, self.toolCompoNames, '/home/xiaofei/workspace/toolPose/regress_results/val')
+            saveMatResult(framesCPU, mapsCPU, outputsGPU, self.toolJointNames, self.toolCompoNames, '/home/xiaofei/workspace/toolPose/finetune_det_results/val')
         end
 
         xlua.progress(n, size)
@@ -419,17 +443,29 @@ function Runner:val(epoch)
     -- calculate loss, acc
     loss = loss / N
     acc = acc * 100 / N
-    local prec = 0.0 -- average joint prec
-    for i=1, #self.toolJointNames do
-        prec_tab[i] = prec_tab[i] / N
-        print(string.format('%s average precision dist = %.2f',self.toolJointNames[i], prec_tab[i]))
-        prec = prec + prec_tab[i]
-    end
-    prec = prec / #self.toolJointNames
+    old_acc = old_acc * 100 / N
+    new_acc = new_acc * 100 / N
 
+    local old_prec = 0.0    -- average joint prec
+    for i=1, #self.toolJointNames do
+        old_prec_tab[i] = old_prec_tab[i] / N
+--        print(string.format('OLD %s average precision dist = %.2f',self.toolJointNames[i], old_prec_tab[i]))
+        old_prec = old_prec + old_prec_tab[i]
+    end
+    old_prec = old_prec / #self.toolJointNames
+
+    local new_prec = 0.0 -- average joint prec
+    for i=1, #self.toolJointNames do
+        new_prec_tab[i] = new_prec_tab[i] / N
+--        print(string.format('NEW %s average precision dist = %.2f',self.toolJointNames[i], new_prec_tab[i]))
+        new_prec = new_prec + new_prec_tab[i]
+    end
+    new_prec = new_prec / #self.toolJointNames
+
+--    acc = 1 / (loss + 1e-5)
     print("\nVal : time to predict = " .. timer:time().real .. ' sec')
 	print("Val : time to load data = " .. dataTime .. ' sec')
-    return acc, loss, prec
+    return acc, loss, old_acc, new_acc
 end
 
 function Runner:test(epoch)
@@ -447,26 +483,21 @@ function Runner:test(epoch)
         -- load data
         dataTime = dataTime + dataTimer:time().real
         -- transfer over to GPU
---        self.framesGPU:resize(framesCPU:size()):copy(framesCPU)
-
-        -- todo: deal with then outputscale ~= 1
-        self.inputsGPU:resize(framesCPU:size(1), framesCPU:size(2)+self.toolJointNum+self.toolCompoNum, framesCPU:size(3), framesCPU:size(4))
-        self.inputsGPU[{{},{1,3}}]:copy(framesCPU)
+        self.framesGPU:resize(framesCPU:size()):copy(framesCPU)
 
         -- forward
---        local jointsGPU = self.detModel:forward(self.framesGPU)
-
---        self.inputsGPU[{{},{4,-1}}] = self.detModel:forward(self.inputsGPU[{{},{1,3}}])
-
-        -- test
-        self.inputsGPU[{{},{4,-1}}] = self.detModel:forward(self.inputsGPU[{{},{1,3}}])
-
-        local outputsGPU = self.model:forward(self.inputsGPU)
+--        print(self.framesGPU:size())
+        local outputsGPU = self.model:forward(self.framesGPU)
+--        local loss_batch = self.criterion:forward(outputsGPU, self.mapsGPU)
+--        loss = loss + loss_batch
+        --  accumulate accuracy
+--        local batch_acc = torch.eq(torch.round(outputsGPU), torch.round(self.mapsGPU)):sum() / self.mapsGPU:nElement()
+--        acc = acc + batch_acc
         N = N + 1
 
         -- visualize result for debugging
         if n == framesCPU:size(1) then
-            saveMatResult(framesCPU, mapsCPU, self.inputsGPU[{{},{4,-1}}], outputsGPU, self.toolJointNames, self.toolCompoNames, '/home/xiaofei/workspace/toolPose/regress_results/test')
+            saveMatResult(framesCPU, mapsCPU, outputsGPU, self.toolJointNames, self.toolCompoNames, '/home/xiaofei/workspace/toolPose/finetune_det_results/test')
         end
 
         xlua.progress(n, size)

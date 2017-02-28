@@ -35,8 +35,8 @@ if not paths.dirp(saveDir) then
 	os.execute('mkdir -p ' .. saveDir)
 end
 
-local function getSaveID(modelConf)
-    local s = modelConf.type
+local function getInitID(modelConf)
+	local s = modelConf.type
     if modelConf.iterCnt ~= nil then
         s = s .. '_i' .. modelConf.iterCnt
     end
@@ -44,24 +44,45 @@ local function getSaveID(modelConf)
     return s
 end
 
+local function getSaveID(modelConf)
+    local s = modelConf.type
+    if modelConf.iterCnt ~= nil then
+        s = s .. '_i' .. modelConf.iterCnt
+    end
+    s = s .. '_v' .. modelConf.v
+	if modelConf.jointRadius ~= nil then
+		s = s .. '_r' .. modelConf.jointRadius
+	end
+    return s
+end
+
 local opt = {
 	dataDir = dataDir,
 	saveDir = saveDir,
-	retrain = 'last', -- nil, 'last' or 'best'
+	retrain = nil, -- nil, 'last' or 'best'
 	learningRate = 1e-3,  -- old 1e-5
-	momentum = 0.99,
+	momentum = 0.95,
 	weightDecay = 0.0005, -- old 0.0005
 	decayRatio = 0.95,
 	updateIternal = 10,
 --	modelConf = {type='toolDualPoseSep', v=1, jointRadius=20, modelOutputScale=4, inputWidth=480, inputHeight=384},
 --	modelConf = {type='toolPartDet', v=1, jointRadius=10, modelOutputScale=4, inputWidth=480, inputHeight=384},
 --	modelConf = {type='toolPartDetFull', v=1, jointRadius=10, modelOutputScale=1, inputWidth=320, inputHeight=256},
-	modelConf = {type='toolPartDetFull', v='192*240', jointRadius=5, modelOutputScale=1, inputWidth=240, inputHeight=192},
+--	modelConf = {type='toolPartDetFull', v='192*240', jointRadius=5, modelOutputScale=1, inputWidth=240, inputHeight=192},
+--	modelConf = {type='toolPartDetFull', v='256*320_ftblr', jointRadius=10, modelOutputScale=1, inputWidth=320, inputHeight=256, vflip=1, hflip=1},
+
+--	modelConf = {type='toolPartDetFull', v='256*320_ftblr_head', jointRadius=10, modelOutputScale=1, inputWidth=320, inputHeight=256, vflip=1, hflip=1},
+
+--	modelConf = {type='toolPartDetFull', v='256*320_ftblr_head', jointRadius=15, modelOutputScale=1, inputWidth=320, inputHeight=256, vflip=1, hflip=1},
+--	modelConf = {type='toolPartDetFull', v='256*320_head', jointRadius=15, modelOutputScale=1, inputWidth=320, inputHeight=256, vflip=0, hflip=0},
+
+	modelConf = {type='toolPartDetFull', v='256*320_ftblr_random_head', jointRadius=15, modelOutputScale=1, inputWidth=320, inputHeight=256, vflip=1, hflip=1},
+
 	gpus = {1},
 	nThreads = 6,
 --	batchSize = 1,  --  examples seems to be the maximum setting for one GPU
-	trainBatchSize = 1,
-	valBatchSize = 1,
+	trainBatchSize = 5,
+	valBatchSize = 5,
 	rotMaxDegree = 0,
     toolJointNames = {'LeftClasperPoint', 'RightClasperPoint',
                           'HeadPoint', 'ShaftPoint', 'EndPoint' }, -- joint number = 5
@@ -76,15 +97,17 @@ opt.jointRadius = opt.modelConf.jointRadius or 20
 opt.modelOutputScale = opt.modelConf.modelOutputScale or 4
 opt.inputWidth = opt.modelConf.inputWidth or 480  -- 720
 opt.inputHeight = opt.modelConf.inputHeight or 384 -- 576
+opt.vflip = opt.modelConf.vflip or 0
+opt.hflip = opt.modelConf.hflip or 0
 
+local initID = getInitID(opt.modelConf)
 local saveID = getSaveID(opt.modelConf)
-local initModelPath = paths.concat(opt.saveDir, 'model.' .. saveID .. '.init.t7')
+local initModelPath = paths.concat(opt.saveDir, 'model.' .. initID .. '.init.t7')
 local lastModelPath = paths.concat(opt.saveDir, 'model.' .. saveID .. '.last.t7')
 local lastOptimStatePath = paths.concat(opt.saveDir, 'optim.' .. saveID .. '.last.t7')
 local bestModelPath = paths.concat(opt.saveDir, 'model.' .. saveID .. '.best.t7')
 local bestOptimStatePath = paths.concat(opt.saveDir, 'optim.' .. saveID .. '.best.t7')
-local loggerPath = paths.concat(opt.saveDir, 'log.' .. saveID .. '.t7')
-local logPath = paths.concat(opt.saveDir, 'log.' .. saveID .. '.txt')
+
 
 local function getModelPath()
     local modelPath
@@ -138,6 +161,9 @@ end
 local model_path = getModelPath()
 local model
 local runningState = {valAcc=0, model = getModel(), optimState = getOptimState() }
+
+local loggerPath = paths.concat(opt.saveDir, 'log.' .. saveID .. '_epoch' .. runningState.optimState.epoch .. '.t7')
+local logPath = paths.concat(opt.saveDir, 'log.' .. saveID .. '_epoch' .. runningState.optimState.epoch .. '.txt')
 
 -- The runner handles the training loop and evaluate on the val set
 local runner = Runner(model_path, opt, runningState.optimState)

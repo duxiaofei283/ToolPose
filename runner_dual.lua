@@ -9,6 +9,86 @@ local DataLoader = require 'dataloader_dual'
 
 torch.setdefaulttensortype('torch.FloatTensor')
 
+local ORIGIN_FRAME_HEIGHT = 576
+local ORIGIN_FRAME_WIDTH = 720
+
+local function JointPrecision(gt_joints_anno, outputs_map, joint_names, dist_thres)
+    local batch_size = outputs_map:size(1)
+    local output_height = outputs_map:size(3)
+    local output_width = outputs_map:size(4)
+    local batch_output_peaks_tab = {}
+    dist_thres = dist_thres or 5
+    local score_factor_thres = 0.5
+
+    -- nms
+    for bidx = 1, batch_size do
+        local output_peaks_tab = {}
+        for i=1, #joint_names do
+            local joint_map = outputs_map[bidx][i]
+            local output_peaks = nmsPt(joint_map, dist_thres, score_factor_thres)
+            for pidx=1, #output_peaks do
+--                print(output_peaks[pidx][1], output_peaks[pidx][2])
+                output_peaks[pidx][1] = output_peaks[pidx][1] / output_height * ORIGIN_FRAME_HEIGHT
+                output_peaks[pidx][2] = output_peaks[pidx][2] / output_width * ORIGIN_FRAME_WIDTH
+            end
+            table.insert(output_peaks_tab, output_peaks)
+        end
+        table.insert(batch_output_peaks_tab, output_peaks_tab)
+    end
+
+    local dist_tab = {}
+    for i=1, #joint_names do
+        table.insert(dist_tab, {})
+    end
+
+    for bidx=1, batch_size do
+        local frame_anno = gt_joints_anno[bidx]
+        for i=1, #joint_names do
+            local joint_anno = frame_anno[joint_names[i]]
+            if joint_anno ~= nil then
+                local output_peaks = batch_output_peaks_tab[bidx][i]
+                for tool_idx=1, #joint_anno do
+                    local gt_joint_x = joint_anno[tool_idx].x * ORIGIN_FRAME_WIDTH
+                    local gt_joint_y = joint_anno[tool_idx].y * ORIGIN_FRAME_HEIGHT
+--                    print(string.format('gtx=%f, gty=%f', gt_joint_x, gt_joint_y))
+                    -- compute the distance
+                    local dist = 1e+8
+                    for pidx=1, #output_peaks do
+                        local result_joint_x = output_peaks[pidx][2]
+                        local result_joint_y = output_peaks[pidx][1]
+--                        print(string.format('rex=%f, rey=%f', result_joint_x, result_joint_y))
+                        local d = math.sqrt(math.pow(gt_joint_x-result_joint_x,2)+math.pow(gt_joint_y-result_joint_y,2))
+                        if d < dist then dist = d end
+                    end
+--                    print(dist)
+                    table.insert(dist_tab[i], dist)
+                end
+            end
+        end
+    end
+
+    -- average dist
+    local avg_dist_tab = {}
+    for i=1, #dist_tab do
+        local avg_dist = 0.0
+        local joint_disttab = dist_tab[i]
+        for j=1, #joint_disttab do
+            avg_dist = avg_dist + joint_disttab[j]
+        end
+        if #joint_disttab ~= 0 then avg_dist = avg_dist / #joint_disttab end
+        table.insert(avg_dist_tab, avg_dist)
+--        print(string.format('%s average precision dist = %.2f',joint_names[i], avg_dist))
+    end
+
+--    local avgdist = 0.0
+--    for i=1, #avg_dist_tab do
+--        avgdist = avgdist + avg_dist_tab[i]
+--    end
+--    avgdist = avgdist / #avg_dist_tab
+--    return avg_dist_tab
+    return avg_dist_tab
+end
+
 local function saveMatResult(frames, gt_maps, outputs_map, joint_names, compo_names, saveDir)
     outputs_map:clamp(0,1)
     local batch_size = frames:size(1)
@@ -69,7 +149,7 @@ function Runner:__init(net_path, opt, optimState)
     -- load network
     print('Loading network ...')
     self.model = torch.load(net_path)
-    print(self.model)
+--    print(self.model)
     self.model:cuda()
 
     -- opt
@@ -83,6 +163,8 @@ function Runner:__init(net_path, opt, optimState)
 
     self.toolJointNum = #self.toolJointNames
     self.toolCompoNum = #self.toolCompoNames
+
+    self.jointRadius = opt.jointRadius or 10
 
 
     self.nGPU = #opt.gpus
@@ -138,6 +220,10 @@ function Runner:train(epoch)
     local size = self.dataLoader:trainSize()
     local loss = 0.0
     local acc = 0.0
+    local prec_tab = {}
+    for i=1, #self.toolJointNames do
+        table.insert(prec_tab, 0.0)
+    end
     local N = 0
 
     self.model:training()
@@ -146,7 +232,7 @@ function Runner:train(epoch)
         return self.criterion.output, self.gradParams
     end
 
-    for n, framesCPU, mapsCPU in self.dataLoader:load(1) do
+    for n, framesCPU, mapsCPU, jointAnnoTab in self.dataLoader:load(1) do
         -- load data
         dataTime = dataTime + dataTimer:time().real
         -- transfer over to GPU
@@ -168,6 +254,10 @@ function Runner:train(epoch)
         -- update parameters
         optim.sgd(feval, self.params, self.optimState)
         -- todo: accumulate accuracy
+        local batch_prec = {}
+        for i=1, #self.toolJointNames do table.insert(batch_prec, -1) end
+--        batch_prec = JointPrecision(jointAnnoTab, outputsGPU, self.toolJointNames, self.jointRadius)
+        for i=1, #self.toolJointNames do prec_tab[i] = prec_tab[i] + batch_prec[i] end
         local batch_acc = torch.eq(torch.round(outputsGPU), torch.round(self.mapsGPU)):sum() / self.mapsGPU:nElement()
         acc = acc + batch_acc
         N = N + 1
@@ -195,10 +285,19 @@ function Runner:train(epoch)
     -- calculate loss, acc
     loss = loss / N
     acc = acc * 100 / N
+
+    local prec = 0.0    -- average joint prec
+    for i=1, #self.toolJointNames do
+        prec_tab[i] = prec_tab[i] / N
+        print(string.format('%s average precision dist = %.2f',self.toolJointNames[i], prec_tab[i]))
+        prec = prec + prec_tab[i]
+    end
+    prec = prec / #self.toolJointNames
+
 --    acc = 1 / (loss + 1e-5)
     print("\nTrain : time to learn = " .. timer:time().real .. ' sec')
 	print("Train : time to load data = " .. dataTime .. ' sec')
-    return acc, loss
+    return acc, loss, prec
 end
 
 function Runner:val(epoch)
@@ -208,11 +307,15 @@ function Runner:val(epoch)
     local size = self.dataLoader:valSize()
     local loss = 0.0
     local acc = 0.0
+    local prec_tab = {}
+    for i=1, #self.toolJointNames do
+        table.insert(prec_tab, 0.0)
+    end
     local N = 0
 
     self.model:evaluate()
 
-    for n, framesCPU, mapsCPU in self.dataLoader:load(2) do
+    for n, framesCPU, mapsCPU, jointAnnoTab in self.dataLoader:load(2) do
         -- load data
         dataTime = dataTime + dataTimer:time().real
         -- transfer over to GPU
@@ -226,6 +329,10 @@ function Runner:val(epoch)
         local loss_batch = self.criterion:forward(outputsGPU, self.mapsGPU)
         loss = loss + loss_batch
         -- todo: accumulate accuracy
+        local batch_prec = {}
+        for i=1, #self.toolJointNames do table.insert(batch_prec, -1) end
+--        batch_prec = JointPrecision(jointAnnoTab, outputsGPU, self.toolJointNames, self.jointRadius)
+        for i=1, #self.toolJointNames do prec_tab[i] = prec_tab[i] + batch_prec[i] end
         local batch_acc = torch.eq(torch.round(outputsGPU), torch.round(self.mapsGPU)):sum() / self.mapsGPU:nElement()
         acc = acc + batch_acc
         N = N + 1
@@ -246,10 +353,17 @@ function Runner:val(epoch)
     -- calculate loss, acc
     loss = loss / N
     acc = acc * 100 / N
+    local prec = 0.0    -- average joint prec
+    for i=1, #self.toolJointNames do
+        prec_tab[i] = prec_tab[i] / N
+        print(string.format('%s average precision dist = %.2f',self.toolJointNames[i], prec_tab[i]))
+        prec = prec + prec_tab[i]
+    end
+    prec = prec / #self.toolJointNames
 --    acc = 1 / (loss + 1e-5)
     print("\nVal : time to predict = " .. timer:time().real .. ' sec')
 	print("Val : time to load data = " .. dataTime .. ' sec')
-    return acc, loss
+    return acc, loss, prec
 end
 
 function Runner:test(epoch)

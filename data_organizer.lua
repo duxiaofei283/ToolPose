@@ -1,41 +1,99 @@
+
+-- normalize the pos to [0,1]
 require 'json'
 require 'image'
 require 'colormap'
-require 'data_utils'
+require 'data_utils_new'
 torch.setdefaulttensortype('torch.FloatTensor')
-
-local baseDir = '/Users/xiaofeidu/workspace/sloth/tool_label'
-local train_anno_tab = {}
-local val_anno_tab = {}
 
 -- read json file
 -- keyword
 -- filename, class=image, annotations
 -- for annotations: keyword
 --  class = LeftClasperPoint, RightClasperPoint HeadPoint, ShaftPoint, TrackedPoint, EndPoint.
---  id = tool1, tool2.
+--  id = tool1, tool2
 --  x y
+local function readtoolLabelFile(label_file_tab)
+    local file_num = #label_file_tab
+    local multi_seq_anno_tab = {}
 
-for seq_idx=1, 4 do
-    local jsonFilePath = paths.concat(baseDir, 'Endo' .. seq_idx .. '_labels.json')
+    for seq_idx=1, file_num do
+        local jsonFilePath = label_file_tab[seq_idx]
+        local json_tab = json.load(jsonFilePath)
 
-    local json_tab = json.load(jsonFilePath)
-    local frame_num = #json_tab
-    local anno_tab = {}
-    -- frame
-    for i=1, frame_num do
-        local frame_name = json_tab[i].filename
-        print('frame ' .. frame_name)
+        local frame_num = #json_tab
+        local anno_tab = {}
+        local anno_frame_num = 0
+        -- frame
+        for i=1, frame_num do
+            local frame_name = json_tab[i].filename
+--            print('old frame ' .. frame_name)
 
-        local annotations = json_tab[i].annotations
-        if #annotations ~= 0 then
-            table.insert(anno_tab, json_tab[i])
+            -- point to new file location
+            frame_name = point2newFileLocation(frame_name, '/Users/xiaofeidu/mData', '/home/xiaofei/public_datasets')
+            frame_name = changeFrameFormat(frame_name, 'img_%06d_raw.png')
+--            print('new frame ' .. frame_name)
+
+            local annotations = json_tab[i].annotations
+            if #annotations ~= 0 then
+                anno_frame_num = anno_frame_num + 1
+                anno_tab[anno_frame_num] = {}
+                anno_tab[anno_frame_num].filename = frame_name
+
+                local tool_ids = {}
+                -- reformat annotations: using joint class as key
+                local frame_anno = {}
+                for j=1, #annotations do
+                    local joint_anno = annotations[j]
+
+                    if frame_anno[joint_anno.class] == nil then
+                        frame_anno[joint_anno.class] = {}
+                    end
+
+                    table.insert(frame_anno[joint_anno.class], { id = joint_anno.id,
+                                                                  x = joint_anno.x,
+                                                                  y = joint_anno.y
+                                                               }
+                    )
+                    tool_ids[joint_anno.id] = true
+                end
+                anno_tab[anno_frame_num].annotations = frame_anno
+                anno_tab[anno_frame_num].jointNum = #annotations
+
+                local tool_num = 0
+                for __, __ in pairs(tool_ids) do
+                    tool_num = tool_num + 1
+                end
+
+                anno_tab[anno_frame_num].toolNum = tool_num
+
+            end
         end
+        -- normalize the location
+        for i=1, #anno_tab do
+            local frame_name = anno_tab[i].filename
+            local frame = image.load(frame_name, 3, 'byte')
+            local frame_width = frame:size(3)
+            local frame_height = frame:size(2)
+            local norm_frame_anno = normalizeToolPos01(frame_width, frame_height, anno_tab[i].annotations)
+            anno_tab[i].annotations = norm_frame_anno
+        end
+        table.insert(multi_seq_anno_tab, anno_tab)
     end
 
+    return multi_seq_anno_tab
+end
+
+-- seperate the data into train and validation set for single sequence
+local function sepTrainingData(anno_tab, train_percentage)
+    train_percentage = train_percentage or 0.8
     local anno_frame_num = #anno_tab
     assert(anno_frame_num >= 1)
-    local train_anno_frame_num = math.max(math.floor(0.8 * anno_frame_num), 1)
+
+    local train_anno_tab = {}
+    local val_anno_tab = {}
+
+    local train_anno_frame_num = math.max(math.floor(train_percentage * anno_frame_num), 1)
 
     for i=1, train_anno_frame_num do
         table.insert(train_anno_tab, anno_tab[i])
@@ -43,91 +101,79 @@ for seq_idx=1, 4 do
     for i=train_anno_frame_num+1, anno_frame_num do
         table.insert(val_anno_tab, anno_tab[i])
     end
-
+    return train_anno_tab, val_anno_tab
 end
 
-torch.save(paths.concat(baseDir, 'train_endo_toolpos.t7'), train_anno_tab)
-torch.save(paths.concat(baseDir, 'val_endo_toolpos.t7'), val_anno_tab)
-print('===========================================================================')
--- ---------------------------------------------------------------------------------------
+-- seperate the data into train and validation set for multiple sequence (internal sequence 80% : 20%)
+local function internalSepTrainingData(multi_seq_anno_tab, train_percentage)
+    train_percentage = train_percentage or 0.8
+    local seq_num = #multi_seq_anno_tab
+    local train_anno_tab = {}
+    local val_anno_tab = {}
+    for seq_idx=1, seq_num do
+        local anno_tab = multi_seq_anno_tab[seq_idx]
+        local anno_frame_num = #anno_tab
+        assert(anno_frame_num >= 1)
 
--- data augmentation
--- raw image format: img_0000xx_raw.png
--- gen joint map and heat map
-local radius = 10
-local sigma = 20
-local train_aug_anno_tab = {}
-local val_aug_anno_tab = {}
+        local train_anno_frame_num = math.max(math.floor(train_percentage * anno_frame_num), 1)
 
-local aug_data_tabs = {train_aug_anno_tab, val_aug_anno_tab}
-
-for xx = 1, #aug_data_tabs do
-    local aug_data_tab = aug_data_tabs[xx]
-
-    for i=1, #train_anno_tab do
-        local frame_anno_tab = train_anno_tab[i]
-        local frame_name = frame_anno_tab.filename
-        print('Augment frame ' .. frame_name)
-        local frame = image.load(frame_name, 3, 'byte')
-        local frame_extname = paths.extname(frame_name)
-        local frame_dir = paths.dirname(frame_name)
-        local aug_dir = paths.concat(paths.dirname(frame_dir), 'aug')
-        if not paths.dirp(aug_dir) then
-            paths.mkdir(aug_dir)
+        for i=1, train_anno_frame_num do
+            table.insert(train_anno_tab, anno_tab[i])
         end
-
-        local frame_basename = paths.basename(frame_name, frame_extname)
-        local frame_idx = tonumber(string.match(frame_basename, '%d+'))
-
-        for degree = -2, 2 do  -- rotation
-            for flip = 0, 1 do  -- no flip and flip
-                -- augmented frame
-                local aug_frame, aug_annos
-                local aug_frame_name_format = 'img_%06d_f%d_d%d_raw.%s'
-                local aug_frame_name = paths.concat(aug_dir, string.format(aug_frame_name_format, frame_idx, flip, degree, frame_extname))
-
-                aug_frame, aug_annos = flipToolPosData(frame, flip, frame_anno_tab.annotations)
-                aug_frame, aug_annos = rotateToolPos(aug_frame, degree, aug_annos)
-
-                image.save(aug_frame_name, aug_frame)
-
-                -- augmented jointmap and heatmap
-                local joint_map, heat_map, jointmap_name, heatmap_name
-                local jointmap_name_format = 'img_%06d_f%d_d%d_%s_%s_jointmap.%s'
-                local heatmap_name_format =  'img_%06d_f%d_d%d_%s_%s_heatmap.%s'
-                for j=1, #aug_annos do
-                    local joint_anno = aug_annos[j]
-                    local joint_class = joint_anno.class
-                    local joint_id = joint_anno.id
-                    print(string.format('augmenting %d, %d, %s', degree, flip, joint_class))
-                    jointmap_name = paths.concat(aug_dir, string.format(jointmap_name_format, frame_idx, flip, degree, joint_id, joint_class, frame_extname))
-                    heatmap_name = paths.concat(aug_dir, string.format(heatmap_name_format, frame_idx, flip, degree, joint_id, joint_class, frame_extname))
-
-                    print(string.format('ori joint_pos: [%f, %f]', frame_anno_tab.annotations[j].x, frame_anno_tab.annotations[j].y))
-                    print(string.format('aug joint_pos: [%f, %f]', joint_anno.x, joint_anno.y))
-                    joint_map = genJointMap(joint_anno.x, joint_anno.y,  radius, aug_frame)
-                    heat_map = genHeatMapFast(joint_anno.x, joint_anno.y, sigma, aug_frame)
-                    local colormap_ = colormap:convert(heat_map)
-                    image.save(jointmap_name, joint_map)
-                    joint_anno.jointmapname = jointmap_name
-                    image.save(heatmap_name, colormap_)
-                    joint_anno.heatmapname = heatmap_name
-                end
-
-                local aug_frame_anno_tab = {}
-                aug_frame_anno_tab.class = 'image'
-                aug_frame_anno_tab.filename = aug_frame_name
-                aug_frame_anno_tab.annotations = aug_annos
-
-                table.insert(aug_data_tab, aug_frame_anno_tab)
-            end
+        for i=train_anno_frame_num+1, anno_frame_num do
+            table.insert(val_anno_tab, anno_tab[i])
         end
+        print(train_anno_frame_num, anno_frame_num - train_anno_frame_num)
     end
-
+    return train_anno_tab, val_anno_tab
 end
 
-torch.save(paths.concat(baseDir, 'train_endo_aug_toolpos.t7'), train_aug_anno_tab)
-torch.save(paths.concat(baseDir, 'val_endo_aug_toolpos.t7'), val_aug_anno_tab)
+-- random seperate the data into train and validation set for multiple sequences
+local function internalRandomSepTrainingData(multi_seq_anno_tab, train_percentage)
+    train_percentage = train_percentage or 0.8
+    local seq_num = #multi_seq_anno_tab
+    local train_anno_tab = {}
+    local val_anno_tab = {}
+    for seq_idx=1, seq_num do
+        local anno_tab = multi_seq_anno_tab[seq_idx]
+        local anno_frame_num = #anno_tab
+        assert(anno_frame_num >= 1)
+        local perm = torch.randperm(anno_frame_num)
+
+        local train_anno_frame_num = math.max(math.floor(train_percentage * anno_frame_num), 1)
+
+        for i=1, train_anno_frame_num do
+            table.insert(train_anno_tab, anno_tab[perm[i]])
+        end
+        for i=train_anno_frame_num+1, anno_frame_num do
+            table.insert(val_anno_tab, anno_tab[perm[i]])
+        end
+        print(train_anno_frame_num, anno_frame_num - train_anno_frame_num)
+    end
+    return train_anno_tab, val_anno_tab
+end
+
+-- train dataset
+local trainBaseDir = '/home/xiaofei/public_datasets/MICCAI_tool/Tracking_Robotic_Training/tool_label'
+local json_files = {}
+for seq_idx=1, 4 do
+--    local json_file_path = paths.concat(trainBaseDir, 'endo' .. seq_idx .. '_labels.json')  -- original label
+    local json_file_path = paths.concat(trainBaseDir, 'train' .. seq_idx .. '_labels.json')  -- improved label (head)
+    table.insert(json_files, json_file_path)
+end
+local anno_tab = readtoolLabelFile(json_files)
+local train_anno_tab, val_anno_tab = internalRandomSepTrainingData(anno_tab)
+print(#train_anno_tab)
+print(#val_anno_tab)
+torch.save(paths.concat(trainBaseDir, 'train_random_toolpos_head.t7'), train_anno_tab)
+torch.save(paths.concat(trainBaseDir, 'val_random_toolpos_head.t7'), val_anno_tab)
+print('===========================================================================')
+
+
+
+
+
+
 
 
 

@@ -1,7 +1,7 @@
 require 'cunn'
 require 'cudnn'
 require 'cutorch'
-local Runner = require 'runner_regressor'
+local Runner = require 'runner_invivo'
 
 torch.setdefaulttensortype('torch.FloatTensor')
 
@@ -26,25 +26,30 @@ local function copyModel(src, dst)
 	end
 end
 
-local dataDir = '/home/xiaofei/public_datasets/MICCAI_tool/Tracking_Robotic_Training/tool_label'
-if not paths.dirp(dataDir) then
-	error("Can't find directory : " .. dataDir)
-end
+local oldDataDir = '/home/xiaofei/public_datasets/MICCAI_tool/Tracking_Robotic_Training/tool_label'
+if not paths.dirp(oldDataDir) then error("Can't find directory : " .. oldDataDir) end
+
+local newDataDir = '/home/xiaofei/public_datasets/MICCAI_tool/Test_data/tool_label'
+if not paths.dirp(newDataDir) then error("Can't find directory : " .. newDataDir) end
+
 local saveDir = '/home/xiaofei/workspace/toolPose/models'
 if not paths.dirp(saveDir) then
 	os.execute('mkdir -p ' .. saveDir)
 end
 
-local function getSaveID(modelConf)
+local function getSaveID(modelConf, dataType)
     local s = modelConf.type
     if modelConf.iterCnt ~= nil then
         s = s .. '_i' .. modelConf.iterCnt
     end
     s = s .. '_v' .. modelConf.v
+    if dataType ~= nil then
+    	s = s .. '_' .. dataType
+	end
     return s
 end
 
-local function getDetID(modelConf)
+local function getDetID(modelConf, dataType)
 	local s = modelConf.type
     if modelConf.iterCnt ~= nil then
         s = s .. '_i' .. modelConf.iterCnt
@@ -53,6 +58,23 @@ local function getDetID(modelConf)
 	if modelConf.jointRadius ~= nil then
 		s = s .. '_r' .. modelConf.jointRadius
 	end
+	if dataType ~= nil then
+    	s = s .. '_' .. dataType
+	end
+	print(s)
+    return s
+end
+
+local function getRegressID(modelConf)
+    local s = modelConf.type
+    if modelConf.iterCnt ~= nil then
+        s = s .. '_i' .. modelConf.iterCnt
+    end
+    s = s .. '_v' .. modelConf.v
+--	if modelConf.jointRadius ~= nil then
+--		s = s .. '_r' .. modelConf.jointRadius
+--	end
+	s = s .. '_whole'
     return s
 end
 
@@ -66,10 +88,12 @@ local function getInitID(modelConf)
 end
 
 local opt = {
-	dataDir = dataDir,
+	oldDataDir = oldDataDir,
+    newDataDir = newDataDir,
 	saveDir = saveDir,
+	dataType = 'invivo2', -- invivo, icl
 	retrain = 'last', -- nil, 'last' or 'best'
-	learningRate = 1e-3,  -- old 1e-5
+	learningRate = 1e-4,  -- old 1e-5
 	momentum = 0.98,
 	weightDecay = 0.0005, -- old 0.0005
 	decayRatio = 0.95,
@@ -84,13 +108,9 @@ local opt = {
 --	detModelConf = {type='toolPartDetFull', v='256*320_ftblr_head', jointRadius=10, modelOutputScale=1, inputWidth=320, inputHeight=256},
 --	modelConf = {type='toolPoseRegressFull', v='256*320_ftblr_head', jointRadius=10, modelOutputScale=1, inputWidth=320, inputHeight=256, normalScale=10, vflip=1, hflip=1},
 
-	-- larger radius for detection model (MICCAI)
---	detModelConf = {type='toolPartDetFull', v='256*320_ftblr_head', jointRadius=15, modelOutputScale=1, inputWidth=320, inputHeight=256},
---	modelConf = {type='toolPoseRegressFull', v='256*320_ftblr_head_noConcat', jointRadius=20, modelOutputScale=1, inputWidth=320, inputHeight=256, normalScale=10, vflip=1, hflip=1},
-
-	detModelConf = {type='toolPartDetFull', v='256*320_ftblr_random_head', jointRadius=15, modelOutputScale=1, inputWidth=320, inputHeight=256},
-	modelConf = {type='toolPoseRegressFull', v='256*320_ftblr_random_head_noConcat', jointRadius=20, modelOutputScale=1, inputWidth=320, inputHeight=256, normalScale=10, vflip=1, hflip=1},
-
+	-- larger radius for detection model
+	detModelConf = {type='toolPartDetFull', v='256*320_ftblr_head', jointRadius=15, modelOutputScale=1, inputWidth=320, inputHeight=256},
+	modelConf = {type='toolPoseRegressFull', v='256*320_ftblr_head_noConcat', jointRadius=20, modelOutputScale=1, inputWidth=320, inputHeight=256, normalScale=10, vflip=1, hflip=1},
 
 	gpus = {1},
 	nThreads = 6,
@@ -116,12 +136,12 @@ opt.normalScale = opt.modelConf.normalScale or 1
 opt.vflip = opt.modelConf.vflip or 0
 opt.hflip = opt.modelConf.hflip or 0
 
-local detID = getDetID(opt.detModelConf)
+local detID = getDetID(opt.detModelConf, opt.dataType)
 local detModelPath = paths.concat(opt.saveDir, 'model.' .. detID .. '.best.t7')
 
-local initID = getInitID(opt.modelConf)
-local saveID = getSaveID(opt.modelConf)
-local initModelPath = paths.concat(opt.saveDir, 'model.' .. initID .. '.init.t7')
+local initID = getRegressID(opt.modelConf)
+local saveID = getSaveID(opt.modelConf, opt.dataType)
+local initModelPath = paths.concat(opt.saveDir, 'model.' .. initID .. '.best.t7')
 local lastModelPath = paths.concat(opt.saveDir, 'model.' .. saveID .. '.last.t7')
 local lastOptimStatePath = paths.concat(opt.saveDir, 'optim.' .. saveID .. '.last.t7')
 local bestModelPath = paths.concat(opt.saveDir, 'model.' .. saveID .. '.best.t7')
@@ -138,6 +158,7 @@ local function getDetModelPath()
     print('current using detection model: ' .. modelPath)
     return modelPath
 end
+
 local function getModelPath()
     local modelPath
     if opt.retrain == 'last' and paths.filep(lastModelPath) then
@@ -190,7 +211,7 @@ end
 local detModel_path = getDetModelPath()
 local model_path = getModelPath()
 local model
-local runningState = {valAcc=0, valPrec=1e+8, model = getModel(), optimState = getOptimState() }
+local runningState = {valAcc=1e+8, model = getModel(), optimState = getOptimState() }
 
 -- The runner handles the training loop and evaluate on the val set
 local runner = Runner(detModel_path, model_path, opt, runningState.optimState)
@@ -202,28 +223,34 @@ local logFile = io.open(logPath, 'w')
 local logger = torch.FloatTensor(opt.nEpoches, 5)
 
 -- Run model on validation set
-local valAcc, valLoss, valPrec = runner:val(0)
+local valAcc, valLoss, oldValPrec, newValPrec, oldValAcc, newValAcc = runner:val(0)
 print(string.format("Val : robustness accuracy = %.3f, loss = %.5f", valAcc, valLoss))
-print(string.format("Val : precision distance = %.3f", valPrec))
+print(string.format('Old: robustness accurary = %.3f', oldValAcc))
+print(string.format('New: robustness accurary = %.3f', newValAcc))
+print(string.format("Old : precision distance = %.3f", oldValPrec))
+print(string.format("New : precision distance = %.3f", newValPrec))
 
 
 for epoch = 1, opt.nEpoches do
     print('\nepoch # ' .. epoch)
 
     -- train for a single epoch
-	local trainAcc, trainLoss, valAcc, valLoss, testAcc, testLoss = 0, 0, 0, 0, 0, 0
-	local trainPrec, valPrec = 1e+8, 1e+8
-    trainAcc, trainLoss, trainPrec = runner:train(epoch)
+    local trainAcc, trainLoss, oldTrainPrec, newTrainPrec, oldTrainAcc, newTrainAcc = runner:train(epoch)
     print(string.format("Train : robustness accuracy = %.3f, loss = %.5f", trainAcc, trainLoss))
-	print(string.format("Train : precision distance = %.3f", trainPrec))
+	print(string.format('Old: robustness accurary = %.3f', oldTrainAcc))
+	print(string.format('New: robustness accurary = %.3f', newTrainAcc))
+	print(string.format("Old : precision distance = %.3f", oldTrainPrec))
+    print(string.format("New : precision distance = %.3f", newTrainPrec))
+
 
 	-- Run model on validation set
-    valAcc, valLoss, valPrec = runner:val(epoch)
+    local valAcc, valLoss, oldValPrec, newValPrec = runner:val(epoch)
     print(string.format("Val : robustness accuracy = %.3f, loss = %.5f", valAcc, valLoss))
-	print(string.format("Val : precision distance = %.3f", valPrec))
-	testAcc, testLoss = runner:test(epoch)
-	print(string.format("Test : test random Sample."))
+	print(string.format("Val : OLD precision distance = %.3f", oldValPrec))
+    print(string.format("Val : NEW precision distance = %.3f", newValPrec))
 
+    local testAcc, testLoss = runner:test(epoch)
+	print(string.format("Test : test random Sample."))
 
 --	copyModel(model, runningState.model)
 --	torch.save(lastModelPath, runningState.model)
@@ -245,16 +272,16 @@ for epoch = 1, opt.nEpoches do
 	print(runningState.optimState)
 
 	print(string.format("Train : robustness accuracy = %.3f, loss = %.5f", trainAcc, trainLoss))
-	print(string.format("Train : precision distance = %.3f", trainPrec))
+	print(string.format("Old : precision distance = %.3f", oldTrainPrec))
+	print(string.format('New: precision distance = %.3f', newTrainPrec))
 	print(string.format("Val : robustness accuracy = %.3f, loss = %.5f", valAcc, valLoss))
-	print(string.format("Val : precision distance = %.3f", valPrec))
+	print(string.format("Old : precision distance = %.3f", oldValPrec))
+	print(string.format("New : precision distance = %.3f", newValPrec))
 
-	if valPrec < runningState.valPrec then
---	if valAcc > runningState.valAcc then
+	if newValPrec < runningState.valAcc then
 		print('Saving the best! ')
 		best_epoch = runningState.optimState.epoch
-		runningState.valAcc = valAcc
-		runningState.valPrec = valPrec
+		runningState.valAcc = newValPrec
 --		torch.save(bestModelPath, runningState.model)
 		torch.save(bestModelPath, model:clearState())
 		saveOptimState(bestOptimStatePath, runningState.optimState)

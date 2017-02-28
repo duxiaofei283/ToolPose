@@ -1,3 +1,4 @@
+-- regress training with train + validate dataset
 require 'cunn'
 require 'cudnn'
 require 'cutorch'
@@ -41,6 +42,7 @@ local function getSaveID(modelConf)
         s = s .. '_i' .. modelConf.iterCnt
     end
     s = s .. '_v' .. modelConf.v
+    s = s .. '_whole'
     return s
 end
 
@@ -52,7 +54,8 @@ local function getDetID(modelConf)
     s = s .. '_v' .. modelConf.v
 	if modelConf.jointRadius ~= nil then
 		s = s .. '_r' .. modelConf.jointRadius
-	end
+    end
+    s = s .. '_whole'
     return s
 end
 
@@ -65,10 +68,20 @@ local function getInitID(modelConf)
     return s
 end
 
+local function getRegressID(modelConf)
+	local s = modelConf.type
+    if modelConf.iterCnt ~= nil then
+        s = s .. '_i' .. modelConf.iterCnt
+    end
+    s = s .. '_v' .. modelConf.v
+    return s
+end
+
 local opt = {
 	dataDir = dataDir,
 	saveDir = saveDir,
-	retrain = 'last', -- nil, 'last' or 'best'
+    trainStyle = 'whole',
+	retrain = nil, -- nil, 'last' or 'best'
 	learningRate = 1e-3,  -- old 1e-5
 	momentum = 0.98,
 	weightDecay = 0.0005, -- old 0.0005
@@ -84,12 +97,10 @@ local opt = {
 --	detModelConf = {type='toolPartDetFull', v='256*320_ftblr_head', jointRadius=10, modelOutputScale=1, inputWidth=320, inputHeight=256},
 --	modelConf = {type='toolPoseRegressFull', v='256*320_ftblr_head', jointRadius=10, modelOutputScale=1, inputWidth=320, inputHeight=256, normalScale=10, vflip=1, hflip=1},
 
-	-- larger radius for detection model (MICCAI)
---	detModelConf = {type='toolPartDetFull', v='256*320_ftblr_head', jointRadius=15, modelOutputScale=1, inputWidth=320, inputHeight=256},
---	modelConf = {type='toolPoseRegressFull', v='256*320_ftblr_head_noConcat', jointRadius=20, modelOutputScale=1, inputWidth=320, inputHeight=256, normalScale=10, vflip=1, hflip=1},
+	-- larger radius for detection model
+	detModelConf = {type='toolPartDetFull', v='256*320_ftblr_head', jointRadius=15, modelOutputScale=1, inputWidth=320, inputHeight=256},
+	modelConf = {type='toolPoseRegressFull', v='256*320_ftblr_head_noConcat', jointRadius=20, modelOutputScale=1, inputWidth=320, inputHeight=256, normalScale=10, vflip=1, hflip=1},
 
-	detModelConf = {type='toolPartDetFull', v='256*320_ftblr_random_head', jointRadius=15, modelOutputScale=1, inputWidth=320, inputHeight=256},
-	modelConf = {type='toolPoseRegressFull', v='256*320_ftblr_random_head_noConcat', jointRadius=20, modelOutputScale=1, inputWidth=320, inputHeight=256, normalScale=10, vflip=1, hflip=1},
 
 
 	gpus = {1},
@@ -119,9 +130,9 @@ opt.hflip = opt.modelConf.hflip or 0
 local detID = getDetID(opt.detModelConf)
 local detModelPath = paths.concat(opt.saveDir, 'model.' .. detID .. '.best.t7')
 
-local initID = getInitID(opt.modelConf)
+local initID = getRegressID(opt.modelConf)
 local saveID = getSaveID(opt.modelConf)
-local initModelPath = paths.concat(opt.saveDir, 'model.' .. initID .. '.init.t7')
+local initModelPath = paths.concat(opt.saveDir, 'model.' .. initID .. '.best.t7')
 local lastModelPath = paths.concat(opt.saveDir, 'model.' .. saveID .. '.last.t7')
 local lastOptimStatePath = paths.concat(opt.saveDir, 'optim.' .. saveID .. '.last.t7')
 local bestModelPath = paths.concat(opt.saveDir, 'model.' .. saveID .. '.best.t7')
@@ -190,7 +201,7 @@ end
 local detModel_path = getDetModelPath()
 local model_path = getModelPath()
 local model
-local runningState = {valAcc=0, valPrec=1e+8, model = getModel(), optimState = getOptimState() }
+local runningState = {valAcc=0, model = getModel(), optimState = getOptimState() }
 
 -- The runner handles the training loop and evaluate on the val set
 local runner = Runner(detModel_path, model_path, opt, runningState.optimState)
@@ -249,12 +260,10 @@ for epoch = 1, opt.nEpoches do
 	print(string.format("Val : robustness accuracy = %.3f, loss = %.5f", valAcc, valLoss))
 	print(string.format("Val : precision distance = %.3f", valPrec))
 
-	if valPrec < runningState.valPrec then
---	if valAcc > runningState.valAcc then
+	if valAcc > runningState.valAcc then
 		print('Saving the best! ')
 		best_epoch = runningState.optimState.epoch
 		runningState.valAcc = valAcc
-		runningState.valPrec = valPrec
 --		torch.save(bestModelPath, runningState.model)
 		torch.save(bestModelPath, model:clearState())
 		saveOptimState(bestOptimStatePath, runningState.optimState)
@@ -277,4 +286,9 @@ logger = nil
 runningState.model = nil
 runningState.optimState = nil
 model = nil
+
+
+
+
+
 

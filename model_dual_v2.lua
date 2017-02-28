@@ -272,8 +272,11 @@ end
 local tool_detnet = ToolDetModelFull(3, 64, 5, 4)
 print(tool_detnet)
 local saveDir = '/home/xiaofei/workspace/toolPose/models'
-local modelConf = {type='toolPartDetFull', v='192*240'}
---
+--local modelConf = {type='toolPartDetFull', v='192*240'}
+--local modelConf = {type='toolPartDetFull', v='256*320_ftblr' }
+local modelConf = {type='toolPartDetFull', v='256*320_ftblr_head'}
+local modelConf = {type='toolPartDetFull', v='256*320_ftblr_random_head'}
+
 local saveID = modelConf.type .. '_v' .. modelConf.v
 local initModelPath = paths.concat(saveDir, 'model.' .. saveID .. '.init.t7')
 torch.save(paths.concat(saveDir, initModelPath), tool_detnet)
